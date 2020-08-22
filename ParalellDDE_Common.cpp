@@ -55,7 +55,7 @@ inline double* linspaceDisc(double a, double b, unsigned int steps, double* tDis
 {
 	double* lst = new double[steps];
 	int* discMask = new int[nrOfDisc];
-	//set all element to 0, set to 1 if the i. discontinouity is included 
+	//set all element to 0, set to 1 if the i. discontinouity is included
 	for (size_t i = 0; i < nrOfDisc; i++)
 	{
 		discMask[i] = 0;
@@ -69,7 +69,7 @@ inline double* linspaceDisc(double a, double b, unsigned int steps, double* tDis
 		for (size_t j = 0; j < nrOfDisc; j++)
 		{
 
-			if (!discMask[j] && fabs(tDisc[j] - t) < eps) //discontinuity happens at a point //this function can cause problems, CORRECT 
+			if (!discMask[j] && fabs(tDisc[j] - t) < eps) //discontinuity happens at a point //this function can cause problems, CORRECT
 			{
 				lst[i] = tDisc[j] - eps;
 				lst[i + 1] = tDisc[j];
@@ -196,7 +196,7 @@ inline void calculateFullIntegrationMesh(double ** integrationMesh, int ** integ
 	unsigned int meshLen = calculateMeshSize(totalNrOfDiscC1, nrOfDelays, 4);
 	mesh = filter(mesh, &meshLen, tStart, NULL, 0, tol);
 	sort(mesh, meshLen);
-	
+
 	//step 4: create mesh types
 	int* meshType = new int[meshLen];
 	for (size_t i = 0; i < meshLen; i++)
@@ -222,14 +222,14 @@ inline void calculateFullIntegrationMesh(double ** integrationMesh, int ** integ
 }
 
 //------------------------------ Timer stuff -------------------------------------------
-uint64_t micros()
+inline uint64_t micros()
 {
 	uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::
 		now().time_since_epoch()).count();
 	return us;
 }
 
-double seconds()
+inline double seconds()
 {
 	return double(micros()) / 1000. / 1000.;
 }
