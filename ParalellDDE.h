@@ -146,8 +146,8 @@ public:
 		{
 			for (size_t j= 0; j < nrOfUnroll * vecSize; j++)
 			{
-				this->xVals[i][xVarIndex][j] = xVals[i];
-				this->xdVals[i][xVarIndex][j] = xdVals[i];
+				this->xVals[i][xDenseVarIndex][j] = xVals[i];
+				this->xdVals[i][xDenseVarIndex][j] = xdVals[i];
 			}
 			
 		}

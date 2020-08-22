@@ -2,6 +2,8 @@
 #define PARALLELDDE_COMMON
 
 #include <iostream>
+#include <chrono>
+#include <cmath>
 
 inline void sort(double* lst, unsigned int len)
 {
@@ -218,5 +220,19 @@ inline void calculateFullIntegrationMesh(double ** integrationMesh, int ** integ
 	*integrationMeshType = meshType;
 	delete doubleStepMesh;
 }
+
+//------------------------------ Timer stuff -------------------------------------------
+uint64_t micros()
+{
+	uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::
+		now().time_since_epoch()).count();
+	return us;
+}
+
+double seconds()
+{
+	return double(micros()) / 1000. / 1000.;
+}
+
 
 #endif // !PARALLELDDE_COMMON

@@ -40,7 +40,7 @@ void ParalellDDE<nrOfVars, nrOfDelays, nrOfDenseVars, nrOfParameters, nrOfEvents
 		if (meshId < meshLen && mesh[meshId] <= t + dt)
 		{
 			stepType = meshType[meshId];
-			std::cout << "step type: " << stepType << std::endl;
+			//std::cout << "step type: " << stepType << std::endl;
 			if(stepType == 1) dt = mesh[meshId] - t;
 			if (stepType == 2)
 			{
@@ -69,7 +69,7 @@ void ParalellDDE<nrOfVars, nrOfDelays, nrOfDenseVars, nrOfParameters, nrOfEvents
 
 		if (stepType == 2)
 		{
-			std::cout << "Mini step" << std::endl;
+			//std::cout << "Mini step" << std::endl;
 			dt = 2 * meshPrecision;
 			RK4step(f);
 
