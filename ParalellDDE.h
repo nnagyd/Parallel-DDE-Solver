@@ -21,34 +21,34 @@ private:
 	double *** __restrict xVals, *** __restrict xdVals, * __restrict tVals;
 	/*
 	Integration memory layout
-	length of outer dimension: denseOutputMemorySize
+	length of outer dimension:	denseOutputMemorySize
 	length of middle dimension: nrOfDenseVars
-	length of inner dimension: nrOfUnroll * vecSize
-	index in inner dimension: unroll * vecSize + vecId
+	length of inner dimension:	nrOfUnroll * vecSize
+	index in inner dimension:	unroll * vecSize + vecId
 	*/
 
 	//mesh points
 	unsigned int meshLen; //number of mesh points
 	unsigned int meshId; //index of next mesh point
-	double* mesh; //synchronized mesh points for variables -> avoid divergence
+	double* __restrict mesh; //synchronized mesh points for variables -> avoid divergence
 	double meshPrecision;
-	int* meshType; //1 = C1 disc or lower (two points saved)	2 = C2 disc. or higher (one point saved, stepped on that point)
+	int* __restrict meshType; //1 = C1 disc or lower (two points saved)	2 = C2 disc. or higher (one point saved, stepped on that point)
 
 	//delays
-	double *t0;
-	unsigned int delayIdToDenseId[nrOfDelays]; //lookup table:	delay -> dense variable index
-	unsigned int varIdToDenseId[nrOfVars]; //lookup table: variable -> dense variable index
-	unsigned int denseIdToVarId[nrOfDenseVars]; //lookup table: dense variable -> variable index
+	double * __restrict t0;
+	unsigned int delayIdToDenseId[nrOfDelays]; //	lookup table:	delay index		-> dense variable index
+	unsigned int varIdToDenseId[nrOfVars]; //		lookup table:	variable index	-> dense variable index
+	unsigned int denseIdToVarId[nrOfDenseVars]; //	lookup table:	dense variable	-> variable index
 
 	//dynamic integration variables
-	Vec4d *x;
+	Vec4d * __restrict x;
 	double t, dt; //synchronized for all threads
 
 	//initial condition
 	Vec4d *x0;
 
 	//temporary integration variables
-	Vec4d *kAct, *kSum, *xTmp, *xDelay;
+	Vec4d * __restrict kAct, * __restrict kSum, * __restrict xTmp, * __restrict xDelay;
 	double tTmp;
 	/*
 	integration variable layout
@@ -56,15 +56,15 @@ private:
 	*/
 
 	//dense output
-	Vec4d *xb, *xn, *xdb, *xdn;
-	double *tb, *deltat, *pdeltat;
+	Vec4d * __restrict xb, * __restrict xn, * __restrict xdb, * __restrict xdn;
+	double * __restrict tb, * __restrict deltat, * __restrict pdeltat;
 	unsigned int lastIndex[nrOfDelays];
 
 	//user given integration range
 	double tStart, tEnd, dtBase;
 
 	//parameters
-	Vec4d * p;
+	Vec4d * __restrict  p;
 
 	//initial discontinouities
 	double a;
@@ -72,7 +72,7 @@ private:
 	unsigned int nrOfC0, nrOfC1, nrOfDisc;
 public:
 	//constructor
-	ParalellDDE() : nrOfExtraPoints(10), meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0)
+	ParalellDDE() : nrOfExtraPoints(10), meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0)
 	{
 		for (size_t i = 0; i < nrOfDelays; i++)
 		{
@@ -96,7 +96,11 @@ public:
 	};
 
 	//destruktor
-	~ParalellDDE() {}; //does nothing
+	~ParalellDDE() 
+	{
+		delete p, x, x0, kAct, kSum, xTmp, xDelay;
+		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;
+	}; //does nothing
 
 	//set functions
 	void setIntegrationRange(double tStart, double tEnd)
@@ -219,6 +223,20 @@ public:
 		{
 			this->x0[i] = x0;
 		}
+	}	
+	void setX0(double* x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
+	{
+		for (size_t i = 0; i < nrOfUnroll; i++)
+		{
+			this->x0[nrOfVars * i + varId].load(x0 + 4 * i);
+		}
+	}
+	void setX0(double x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
+	{
+		for (size_t i = 0; i < nrOfUnroll; i++)
+		{
+			this->x0[nrOfVars * i + varId] = x0;
+		}
 	}
 	void addMeshPoint(double t, int type)
 	{
@@ -264,7 +282,7 @@ public:
 		mesh = newMesh;
 		meshType = newMeshType;
 	}
-	void setParameters(double* p, unsigned int parameterId) //size of p should be nrOfUnroll * nrOfParameter * 4
+	void setParameters(double* p, unsigned int parameterId) //size of p should be at least nrOfUnroll * nrOfParameter * 4
 	{
 		for (size_t i = 0; i < nrOfUnroll; i++)
 		{
@@ -436,7 +454,7 @@ public:
 						x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
 					}
 				}
-				std::cout << std::setprecision(16) << "t = " << t << "\tx = " << x[0][0] << "\t" << x[1][0] << std::endl;
+				//std::cout << std::setprecision(16) << "t = " << t << "\tx = " << x[0][0] << "\t" << x[1][0] << std::endl;
 			}
 
 
@@ -536,7 +554,6 @@ public:
 				xn[linIndexOffset].load(xVals[id + 1][denseVar] + i * vecSize);
 				xdb[linIndexOffset].load(xdVals[id][denseVar] + i * vecSize);
 				xdn[linIndexOffset].load(xdVals[id + 1][denseVar] + i * vecSize);
-				//std::cout << "Loaded tDelay = " << tDelay << " t_b= " << tb << " x_b= " << xb[i][0] << " x_n= " << xn[i][0] << " xd_b= " << xdb[i][0] << " xd_n= " << xdn[i][0] << std::endl;
 			}
 		}
 
@@ -547,8 +564,7 @@ public:
 		{
 			unsigned int linIndexOffset = nrOfDelays * i + delayId;
 			xDelay[linIndexOffset] = -thetaM1 * xb[linIndexOffset] + theta * (xn[linIndexOffset] + thetaM1 * ((1 - 2 * theta) * (xn[linIndexOffset] - xb[linIndexOffset]) + deltat[delayId] * (thetaM1 * xdb[linIndexOffset] + theta * xdn[linIndexOffset])));
-			//std::cout << "th = " << theta << std::endl;
-		}
+			}
 	}
 	void calculateAllDelay(double atT)
 	{
@@ -581,6 +597,8 @@ public:
 			}
 			ofs << std::endl;
 		}
+		ofs.flush();
+		ofs.close();
 	}
 
 	//debug functions
