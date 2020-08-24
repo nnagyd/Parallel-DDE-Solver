@@ -72,7 +72,6 @@ private:
 	unsigned int nrOfC0, nrOfC1, nrOfDisc;
 
 	//event stuff
-public:
 	Vec4d* prevVals;
 	Vec4d* newVals;
 	double eventPrecision;
@@ -478,10 +477,6 @@ public:
 					dt = eventPrecision;
 
 					//intervention in the integration
-					//std::cout << "INTERVENTION\n\n\n\n\n";
-					prevVals; newVals;
-
-
 					for (size_t i = 0; i < nrOfUnroll; i++) //go through unroll
 					{
 						for (size_t j = 0; j < nrOfEvents; j++)
@@ -490,7 +485,6 @@ public:
 							Vec4d tmp = prevVals[nrOfEvents * i + j] * newVals[nrOfEvents * i + j];
 							Vec4db mask = tmp < 0.0 && (prevVals[nrOfEvents * i + j] < newVals[nrOfEvents * i + j]);
 							prevVals[nrOfEvents * i + j] = select(mask, NAN, prevVals[nrOfEvents * i + j]);
-							//std::cout << mask[0] << std::endl;
 							int eventDir = 1;
 							eventIntervention(j, eventDir, mask,t, x + nrOfVars * i, xDelay + nrOfDelays * i, p + nrOfParameters * i);
 
@@ -515,7 +509,6 @@ public:
 				else
 				{
 					stepType = meshType[meshId];
-					//std::cout << "step type: " << stepType << std::endl;
 					if (stepType == 1)
 					{
 						dt = mesh[meshId] - t;
@@ -525,7 +518,7 @@ public:
 						dt = mesh[meshId] - t - meshPrecision;
 					}
 				}
-			}
+			}//end of mesh detection
 
 			//RK4 step
 			RK4(f);
@@ -547,7 +540,6 @@ public:
 						}
 					}
 					eventLocation(newVals + nrOfEvents * i, t, xTmp + nrOfVars * i, xDelay + nrOfVars * i, p + nrOfParameters * i);
-					//std::cout << "Event value = " << newVals[0][0] << std::endl;
 					//check for event
 					for (size_t j = 0; j < nrOfEvents; j++)
 					{
@@ -568,7 +560,7 @@ public:
 				{
 					stepType = 4;
 				}
-			}
+			} //end of find event
 
 			//if step is acceptable
 			if (nrOfEvents == 0 || stepType != 3)
@@ -592,14 +584,10 @@ public:
 						x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
 					}
 				}
+			} //end of accept step
+		} //end of while
+	}//end of integrate
 
-			}
-
-			//std::cout << std::setprecision(6) << "t = " << std::setw(8) << t << "\tx = " << std::setw(8) << x[1][0] << "\t" << std::setw(8) << x[1][1] << "\t" << std::setw(8) << x[1][2] << "\t" << std::setw(8) << x[1][3] << "\tStep type= " << stepType << "\tdt= " << dt << std::endl;
-
-		}
-
-	}
 	void RK4(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		//k1
