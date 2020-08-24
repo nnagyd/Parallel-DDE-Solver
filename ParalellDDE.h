@@ -30,12 +30,12 @@ private:
 	//mesh points
 	unsigned int meshLen; //number of mesh points
 	unsigned int meshId; //index of next mesh point
-	double* __restrict mesh; //synchronized mesh points for variables -> avoid divergence
+	double* mesh; //synchronized mesh points for variables -> avoid divergence
 	double meshPrecision;
-	int* __restrict meshType; //1 = C1 disc or lower (two points saved)	2 = C2 disc. or higher (one point saved, stepped on that point)
+	int* meshType; //1 = C1 disc or lower (two points saved)	2 = C2 disc. or higher (one point saved, stepped on that point)
 
 	//delays
-	double * __restrict t0;
+	double * t0;
 	unsigned int delayIdToDenseId[nrOfDelays]; //	lookup table:	delay index		-> dense variable index
 	unsigned int varIdToDenseId[nrOfVars]; //		lookup table:	variable index	-> dense variable index
 	unsigned int denseIdToVarId[nrOfDenseVars]; //	lookup table:	dense variable	-> variable index
@@ -64,20 +64,31 @@ private:
 	double tStart, tEnd, dtBase;
 
 	//parameters
-	Vec4d * __restrict  p;
+	Vec4d * __restrict p;
 
 	//initial discontinouities
 	double a;
 	double* discC0Init, *discC1Init, *discInit;
 	unsigned int nrOfC0, nrOfC1, nrOfDisc;
+
+	//event stuff
+public:
+	Vec4d* prevVals;
+	Vec4d* newVals;
+	double eventPrecision;
+	void (*eventLocation)(Vec4d* lst, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
+	void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
+
 public:
 	//constructor
-	ParalellDDE() : nrOfExtraPoints(10), meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0)
+	ParalellDDE() : nrOfExtraPoints(10), meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10)
 	{
 		for (size_t i = 0; i < nrOfDelays; i++)
 		{
 			lastIndex[i] = 0;
 		}
+		prevVals = new Vec4d[nrOfEvents * nrOfUnroll];
+		newVals = new Vec4d[nrOfEvents * nrOfUnroll];
 		p = new Vec4d[nrOfParameters * nrOfUnroll];
 		x = new Vec4d[nrOfVars * nrOfUnroll];
 		x0 = new Vec4d[nrOfVars * nrOfUnroll];
@@ -96,10 +107,10 @@ public:
 	};
 
 	//destruktor
-	~ParalellDDE() 
+	~ParalellDDE()
 	{
-		delete p, x, x0, kAct, kSum, xTmp, xDelay;
-		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;
+		/*delete p, x, x0, kAct, kSum, xTmp, xDelay;
+		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;*/
 	}; //does nothing
 
 	//set functions
@@ -216,14 +227,13 @@ public:
 		this->t0[delayId] = t0;
 		this->delayIdToDenseId[delayId] = denseVarId;
 	}
-	void setInitialConditions(Vec4d* x0) {};
 	void setX0(double x0)
 	{
 		for (size_t i = 0; i < nrOfUnroll * nrOfVars; i++)
 		{
 			this->x0[i] = x0;
 		}
-	}	
+	}
 	void setX0(double* x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
 	{
 		for (size_t i = 0; i < nrOfUnroll; i++)
@@ -296,6 +306,23 @@ public:
 			this->p[nrOfParameters * i + parameterId] = p;
 		}
 	}
+	void setT(double t)
+	{
+		this->t = t;
+	}
+	void setEventPrecision(double prec)
+	{
+		this->eventPrecision = prec;
+	}
+	//event functions
+	void addEventLocationFunction(void (*eventLocation)(Vec4d* lst, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	{
+		this->eventLocation = eventLocation;
+	}
+	void addEventInterventionFunction(void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	{
+		this->eventIntervention = eventIntervention;
+	}
 
 	//get functions
 	unsigned int getDenseOutputMemoryLength() //returns memory length
@@ -341,6 +368,10 @@ public:
 			}
 		}
 		return endVals;
+	}
+	double getT()
+	{
+		return t;
 	}
 
 	//calculate functions - alternative to set, it does the job itself
@@ -394,53 +425,160 @@ public:
 		{
 			lastIndex[i] = 0;
 		}
+		for (size_t i = 0; i < nrOfEvents; i++)
+		{
+			prevVals[i] = NAN;
+			newVals[i] = NAN;
+		}
 		meshId = 0;
 
 		//integration
-		int stepType;
+		int stepType = 0;
+		//0 normal step
+		//1 simple mesh point
+		//2 double mesh point
+		//3 stepsize decrease because event, doesnt accept step
+		//4 acceptable step near event
+		//5 event is found, we are after that
+		bool nearEvent = false;
 		while (t < tEnd)
 		{
-			//assuming a simple step
-			stepType = 0;
-			dt = dtBase;
+			if (stepType == 0) //if no double point neccessary
+			{
+				dt = dtBase;
+			}
+			if (stepType == 1) //if simple mesh step was successful
+			{
+				dt = dtBase;
+				stepType = 0;
+				meshId++;
+			}
+			if (stepType == 2) //if last step was a double mesh point
+			{
+				dt = 2 * meshPrecision;
+				stepType = 0;
+				meshId++;
+			}
+			if (nrOfEvents != 0 && stepType == 5) //dt should go back to normal
+			{
+				dt = dtBase;
+				stepType = 0;
+			}
+			if (nrOfEvents != 0 && stepType == 3) //dt = dt / 2 and flush lastIndex
+			{
+				dt = 0.5 * dt;
+				for (size_t i = 0; i < nrOfDelays; i++)
+				{
+					lastIndex[i] = 0;
+				}
+				if (dt < eventPrecision)
+				{
+					stepType = 5;
+					nearEvent = false;
+					dt = eventPrecision;
+
+					//intervention in the integration
+					//std::cout << "INTERVENTION\n\n\n\n\n";
+					prevVals; newVals;
+
+
+					for (size_t i = 0; i < nrOfUnroll; i++) //go through unroll
+					{
+						for (size_t j = 0; j < nrOfEvents; j++)
+						{
+							//check for positive direction of event
+							Vec4d tmp = prevVals[nrOfEvents * i + j] * newVals[nrOfEvents * i + j];
+							Vec4db mask = tmp < 0.0 && (prevVals[nrOfEvents * i + j] < newVals[nrOfEvents * i + j]);
+							prevVals[nrOfEvents * i + j] = select(mask, NAN, prevVals[nrOfEvents * i + j]);
+							//std::cout << mask[0] << std::endl;
+							int eventDir = 1;
+							eventIntervention(j, eventDir, mask,t, x + nrOfVars * i, xDelay + nrOfDelays * i, p + nrOfParameters * i);
+
+							//check for negativ direction of event
+							mask = tmp < 0.0 && (prevVals[nrOfEvents * i + j] > newVals[nrOfEvents * i + j]);
+							prevVals[nrOfEvents * i + j] = select(mask, NAN, prevVals[nrOfEvents * i + j]);
+							eventDir = -1;
+							eventIntervention(j, eventDir, mask,t, x + nrOfVars * i, xDelay + nrOfDelays * i, p + nrOfParameters * i);
+
+						}
+					}
+				}
+			}
 
 			//detecting a mesh point
 			if (meshId < meshLen && mesh[meshId] <= t + dt)
 			{
-				stepType = meshType[meshId];
-				//std::cout << "step type: " << stepType << std::endl;
-				if (stepType == 1) dt = mesh[meshId] - t;
-				if (stepType == 2)
+				if(nrOfEvents != 0 && stepType == 5 ) //forced step
 				{
-					dt = mesh[meshId] - t - meshPrecision;
+					meshId++;
 				}
-				meshId++;
+				else
+				{
+					stepType = meshType[meshId];
+					//std::cout << "step type: " << stepType << std::endl;
+					if (stepType == 1)
+					{
+						dt = mesh[meshId] - t;
+					}
+					if (stepType == 2)
+					{
+						dt = mesh[meshId] - t - meshPrecision;
+					}
+				}
 			}
 
 			//RK4 step
-			RK4step(f);
+			RK4(f);
 
-
-			//save end values
-			memoryId++;
-			tVals[memoryId] = t;
-			for (size_t i = 0; i < nrOfUnroll; i++)
+			//find event
+			if (nrOfEvents != 0 && stepType != 5) //optimized out if there's no event
 			{
-				//save dense output points
-				for (size_t j = 0; j < nrOfDenseVars; j++)
+				uint64_t sum = 0;
+
+				//going through each variable to step for events
+				for (size_t i = 0; i < nrOfUnroll; i++)
 				{
-					unsigned int varId = denseIdToVarId[j];
-					x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
+					//push values, if step was not flushed
+					if (stepType != 3)
+					{
+						for (size_t j = 0; j < nrOfEvents; j++)
+						{
+							prevVals[i * nrOfEvents + j] = newVals[i * nrOfEvents + j];
+						}
+					}
+					eventLocation(newVals + nrOfEvents * i, t, xTmp + nrOfVars * i, xDelay + nrOfVars * i, p + nrOfParameters * i);
+					//std::cout << "Event value = " << newVals[0][0] << std::endl;
+					//check for event
+					for (size_t j = 0; j < nrOfEvents; j++)
+					{
+						Vec4d prod = prevVals[i * nrOfEvents + j] * newVals[i * nrOfEvents + j];
+						Vec4db res = prod < 0; //1 when zero in the interval
+						sum += horizontal_add(res);
+					}
+				}
+
+				//sum > 0, step through event, unaccaptable step
+				if (sum > 0)
+				{
+					stepType = 3;
+					nearEvent = true;
+				}
+				//near an event, but we dont reach that yet, stepsize should stay
+				if (sum == 0 && nearEvent == true)
+				{
+					stepType = 4;
 				}
 			}
-			//std::cout << std::setprecision(16) << "t = " << t << "\tx = " << x[0][0] << "\t" << x[1][0] << std::endl;
 
-			if (stepType == 2)
+			//if step is acceptable
+			if (nrOfEvents == 0 || stepType != 3)
 			{
-				//std::cout << "Mini step" << std::endl;
-				dt = 2 * meshPrecision;
-				RK4step(f);
 
+				t += dt;
+				for (size_t i = 0; i < nrOfVars*nrOfUnroll; i++)
+				{
+					x[i] = xTmp[i];
+				}
 
 				//save end values
 				memoryId++;
@@ -454,14 +592,15 @@ public:
 						x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
 					}
 				}
-				//std::cout << std::setprecision(16) << "t = " << t << "\tx = " << x[0][0] << "\t" << x[1][0] << std::endl;
+
 			}
 
+			//std::cout << std::setprecision(6) << "t = " << std::setw(8) << t << "\tx = " << std::setw(8) << x[1][0] << "\t" << std::setw(8) << x[1][1] << "\t" << std::setw(8) << x[1][2] << "\t" << std::setw(8) << x[1][3] << "\tStep type= " << stepType << "\tdt= " << dt << std::endl;
 
 		}
 
 	}
-	void RK4step(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	void RK4(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		//k1
 		calculateAllDelay(t);
@@ -517,14 +656,11 @@ public:
 			f(&(kAct[nrOfVars * i]), tTmp, &(xTmp[nrOfVars * i]), &(xDelay[nrOfDelays * i]), &(p[nrOfParameters * i]));
 		}
 
-
-		//result of step
 		for (size_t i = 0; i < nrOfVars * nrOfUnroll; i++)
 		{
 			kSum[i] += kAct[i];
-			x[i] += (1. / 6.) * dt * kSum[i];
+			xTmp[i] = x[i] + (1. / 6.) * dt * kSum[i];
 		}
-		t += dt;
 	}
 
 	//dense output
