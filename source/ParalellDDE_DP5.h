@@ -15,50 +15,55 @@ class ParalellDDE_DP5
 {
 private:
 	//sizes
-	unsigned int nrOfSteps; //user given
-	unsigned int denseOutputMemoryLength, memoryId;//calculated
+	unsigned int nrOfSteps;
+	unsigned int memoryId;
 
 	//integration memory to every variable with dense output
 	double*** __restrict denseK1, *** __restrict denseK2, *** __restrict denseK3, *** __restrict denseK4, *** __restrict denseK5;
-	double***__restrict denseK6, *** __restrict denseX, *** __restrict denseT;
+	double***__restrict denseK6, *** __restrict denseX, ** __restrict denseT;
 	/*
 	Integration memory layout
 	length of outer dimension:	denseOutputMemorySize
 	length of middle dimension: nrOfDenseVars
-	length of inner dimension:	nrOfUnroll * vecSize
-	index in inner dimension:	unroll * vecSize + vecId
+	length of inner dimension:	vecSize
 	*/
 
 	//mesh points -> synchronized
 	unsigned int meshLen; //number of mesh points
 	unsigned int * meshId; //index of next mesh point
 	double* mesh; //synchronized mesh points for variables -> avoid divergence
+	Vec4d nextMesh;
 	double meshPrecision;
 	int* meshType; //1 = C1 disc or lower (two points saved)	2 = C2 disc. or higher (one point saved, stepped on that point)
+	/*
+	Every equation tracks it's mesh points
+	*/
 
-	//delays
-	double * t0;
+
+	//delays -> synchronized
+	double * t0; 
 	unsigned int delayIdToDenseId[nrOfDelays]; //	lookup table:	delay index		-> dense variable index
 	unsigned int varIdToDenseId[nrOfVars]; //		lookup table:	variable index	-> dense variable index
 	unsigned int denseIdToVarId[nrOfDenseVars]; //	lookup table:	dense variable	-> variable index
+	unsigned int delayIdToVarId[nrOfDenseVars]; //	lookup table:	delay index	-> variable index
 
 	//dynamic integration variables
 	Vec4d *__restrict x;
-	Vec4d *__restrict t, * __restrict dt; //synchronized for all threads
+	Vec4d t, dt; //synchronized for all threads
 
 	//initial condition
 	Vec4d * x0;
 
 	//temporary integration variables
-	Vec4d *__restrict k1, * __restrict k2, * __restrict k3, * __restrict k4, * __restrict k5, * __restrict k6;
-	Vec4d *__restrict xTmp, * __restrict xDelay, * __restrict x4, * __restrict x5, * __restrict tTmp;
+	Vec4d *__restrict k1, * __restrict k2, * __restrict k3, * __restrict k4, * __restrict k5, * __restrict k6, * __restrict k7;
+	Vec4d *__restrict xTmp, * __restrict xDelay, * __restrict x4, * __restrict x5, tTmp;
 	/*
 	integration variable layout
 	indexing: unroll*nrOfvars + var
 	*/
 
-	//dense output
-	Vec4d * __restrict lk1, * __restrict lk2, * __restrict lk3, * __restrict lk3, * __restrict lk4, * __restrict lk5, * __restrict lk6;
+	//dense output memory -> to every delay
+	Vec4d * __restrict lk1, * __restrict lk2, * __restrict lk3, * __restrict lk4, * __restrict lk5, * __restrict lk6, * __restrict theta, * __restrict lX, * __restrict lDt;
 	unsigned int * __restrict lastIndex, * __restrict newLastIndex;
 
 	//user given integration range
@@ -71,64 +76,73 @@ private:
 	double* discC0Init, *discC1Init, *discInit;
 	unsigned int nrOfC0, nrOfC1, nrOfDisc;
 
-	typedef double(*funcSlot)(double);
+	//initial functions
+	typedef double(*funcSlot)(double, int);
 	funcSlot* initialFunction;
 
 	//event stuff
 	Vec4d* prevVals;
 	Vec4d* newVals;
 	double eventPrecision;
-	void (*eventLocation)(Vec4d* lst, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
-	void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
+	void (*eventLocation)(Vec4d* lst, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
+	void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
+
+	//adaptive solver
+	double absTol, relTol;
 
 public:
 	//constructor
-	ParalellDDE() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), eventFlushLookBack(100)
+	ParalellDDE_DP5() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10)
 	{
-		//index prediction
-		lastIndex = new unsigned int[nrOfDelays * nrOfUnroll];
-		newLastIndex = new unsigned int[nrOfDelays * nrOfUnroll];
-		meshId = new unsigned int[nrOfVars * nrOfUnroll];
+		//initial function
+		initialFunction = new funcSlot[nrOfDenseVars];
 
-		for (size_t i = 0; i < nrOfDelays; i++)
+		//index prediction
+		lastIndex = new unsigned int[nrOfDelays * vecSize];
+		newLastIndex = new unsigned int[nrOfDelays * vecSize];
+		meshId = new unsigned int[vecSize];
+		for (size_t i = 0; i < nrOfDelays * vecSize; i++)
 		{
 			lastIndex[i] = 0;
 		}
-		prevVals = new Vec4d[nrOfEvents * nrOfUnroll];
-		newVals = new Vec4d[nrOfEvents * nrOfUnroll];
+
+		//events
+		prevVals = new Vec4d[nrOfEvents];
+		newVals = new Vec4d[nrOfEvents];
 
 		//integration
-		p = new Vec4d[nrOfParameters * nrOfUnroll];
-		x = new Vec4d[nrOfVars * nrOfUnroll];
-		x0 = new Vec4d[nrOfVars * nrOfUnroll];
-		k1 = new Vec4d[nrOfVars * nrOfUnroll];
-		k2 = new Vec4d[nrOfVars * nrOfUnroll];
-		k3 = new Vec4d[nrOfVars * nrOfUnroll];
-		k4 = new Vec4d[nrOfVars * nrOfUnroll];
-		k5 = new Vec4d[nrOfVars * nrOfUnroll];
-		k6 = new Vec4d[nrOfVars * nrOfUnroll];
-		xTmp = new Vec4d[nrOfVars * nrOfUnroll];
-		xDelay = new Vec4d[nrOfDelays * nrOfUnroll];
-
-		t = new Vec4d[nrOfVars * nrOfUnroll];
-		dt = new Vec4d[nrOfVars * nrOfUnroll];
-		tTmp = new Vec4d[nrOfVars * nrOfUnroll];
+		p = new Vec4d[nrOfParameters];
+		x = new Vec4d[nrOfVars];
+		x0 = new Vec4d[nrOfVars];
+		x4 = new Vec4d[nrOfVars];
+		x5 = new Vec4d[nrOfVars];
+		k1 = new Vec4d[nrOfVars];
+		k2 = new Vec4d[nrOfVars];
+		k3 = new Vec4d[nrOfVars];
+		k4 = new Vec4d[nrOfVars];
+		k5 = new Vec4d[nrOfVars];
+		k6 = new Vec4d[nrOfVars];
+		k7 = new Vec4d[nrOfVars];
+		xTmp = new Vec4d[nrOfVars];
+		xDelay = new Vec4d[nrOfDelays];
 		
 		//dense output
-		lk1 = new Vec4d[nrOfDelays * nrOfUnroll];
-		lk2 = new Vec4d[nrOfDelays * nrOfUnroll];
-		lk3 = new Vec4d[nrOfDelays * nrOfUnroll];
-		lk4 = new Vec4d[nrOfDelays * nrOfUnroll];
-		lk5 = new Vec4d[nrOfDelays * nrOfUnroll];
-		lk6 = new Vec4d[nrOfDelays * nrOfUnroll];
-		theta = new Vec4d[nrOfDelays * nrOfUnroll];
+		lk1 =   new Vec4d[nrOfDelays];
+		lk2 =   new Vec4d[nrOfDelays];
+		lk3 =   new Vec4d[nrOfDelays];
+		lk4 =   new Vec4d[nrOfDelays];
+		lk5 =   new Vec4d[nrOfDelays];
+		lk6 =   new Vec4d[nrOfDelays];
+		lX =    new Vec4d[nrOfDelays];
+		lDt =   new Vec4d[nrOfDelays];
+		theta = new Vec4d[nrOfDelays];
 
 		//delays
 		t0 = new double[nrOfDelays];
 	};
 
 	//destruktor
-	~ParalellDDE()
+	~ParalellDDE_DP5()
 	{
 		/*delete p, x, x0, kAct, kSum, xTmp, xDelay;
 		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;*/
@@ -143,12 +157,11 @@ public:
 	void setStepSize(double dt)
 	{
 		this->dtBase = dt;
-		this->nrOfSteps = unsigned((tEnd - tStart) / dt);
 	}
 	void setNrOfSteps(unsigned int nrOfSteps)
 	{
 		this->nrOfSteps = nrOfSteps;
-		this->dtBase = (tEnd - tStart) / double(nrOfSteps);
+		allocateMemory();
 	}
 	void setNrOfDisc(unsigned int nrOfDisc)
 	{
@@ -157,19 +170,22 @@ public:
 	void allocateMemory()
 	{
 		//allocate arrays
-		this->denseOutputMemoryLength = nrOfSteps;
-		this->denseT = new double** [denseOutputMemoryLength];
-		this->denseX = new double** [denseOutputMemoryLength];
-		this->denseK1 = new double** [denseOutputMemoryLength];
-		this->denseK2 = new double** [denseOutputMemoryLength];
-		this->denseK3 = new double** [denseOutputMemoryLength];
-		this->denseK4 = new double** [denseOutputMemoryLength];
-		this->denseK5 = new double** [denseOutputMemoryLength];
-		this->denseK6 = new double ** [denseOutputMemoryLength];
+		this->denseT = new double* [nrOfSteps];
+		this->denseX = new double** [nrOfSteps];
+		this->denseK1 = new double** [nrOfSteps];
+		this->denseK2 = new double** [nrOfSteps];
+		this->denseK3 = new double** [nrOfSteps];
+		this->denseK4 = new double** [nrOfSteps];
+		this->denseK5 = new double** [nrOfSteps];
+		this->denseK6 = new double ** [nrOfSteps];
 
-		for (size_t i = 0; i < denseOutputMemoryLength; i++)
+		for (size_t i = 0; i < nrOfSteps; i++)
 		{
-			this->denseT [i] = new double* [nrOfDenseVars];
+			this->denseT [i] = new double[vecSize];
+			for (size_t j = 0; j < vecSize; j++)
+			{
+				this->denseT[i][j] = NAN;
+			}
 			this->denseX [i] = new double* [nrOfDenseVars];
 			this->denseK1[i] = new double* [nrOfDenseVars];
 			this->denseK2[i] = new double* [nrOfDenseVars];
@@ -179,14 +195,23 @@ public:
 			this->denseK6[i] = new double* [nrOfDenseVars];
 			for (size_t j = 0; j < nrOfDenseVars; j++)
 			{
-				this->denseT [i][j] = new double[nrOfUnroll * vecSize];
-				this->denseX [i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK1[i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK2[i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK3[i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK4[i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK5[i][j] = new double[nrOfUnroll * vecSize];
-				this->denseK6[i][j] = new double[nrOfUnroll * vecSize];
+				this->denseX [i][j] = new double[vecSize];
+				this->denseK1[i][j] = new double[vecSize];
+				this->denseK2[i][j] = new double[vecSize];
+				this->denseK3[i][j] = new double[vecSize];
+				this->denseK4[i][j] = new double[vecSize];
+				this->denseK5[i][j] = new double[vecSize];
+				this->denseK6[i][j] = new double[vecSize];
+				for (size_t k = 0; k < vecSize; k++)
+				{
+					this->denseX[i][j] [k]=	NAN;
+					this->denseK1[i][j][k] =NAN;
+					this->denseK2[i][j][k] =NAN;
+					this->denseK3[i][j][k] =NAN;
+					this->denseK4[i][j][k] =NAN;
+					this->denseK5[i][j][k] =NAN;
+					this->denseK6[i][j][k] =NAN;
+				}
 			}
 
 		}
@@ -235,7 +260,15 @@ public:
 	void addDelay(unsigned int delayId,double t0, unsigned int denseVarId)
 	{
 		this->t0[delayId] = t0;
-		this->delayIdToDenseId[delayId] = denseVarId;
+		this->delayIdToDenseId[delayId] = denseVarId; //delay --> dense var
+		this->delayIdToVarId[delayId] = this->denseIdToVarId[denseVarId]; //delay --> var
+	}
+	void addInitialFunction(int varId, int denseVarId, double f(double, int))
+	{
+		this->initialFunction[denseVarId] = f;
+		this->varIdToDenseId[varId] = denseVarId; //var --> dense
+		this->denseIdToVarId[denseVarId] = varId; //dense --> var
+
 	}
 	void setX0(double x0)
 	{
@@ -324,10 +357,6 @@ public:
 	{
 		this->eventPrecision = prec;
 	}
-	void setEventFlushLookback(unsigned int setback)
-	{
-		this->eventFlushLookBack = setback;
-	}
 
 	//event functions
 	void addEventLocationFunction(void (*eventLocation)(Vec4d* lst, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
@@ -340,13 +369,9 @@ public:
 	}
 
 	//get functions
-	unsigned int getDenseOutputMemoryLength() //returns memory length
-	{
-		return denseOutputMemoryLength;
-	}
 	unsigned int getDenseOutputMemorySize() //returns whole memory size in bytes
 	{
-		return 2 * denseOutputMemoryLength * nrOfDenseVars * nrOfUnroll * vecSize * sizeof(double) + denseOutputMemoryLength * sizeof(double);
+		return 8 * nrOfSteps * nrOfDenseVars  * vecSize * sizeof(double);
 	}
 	double* getMesh()
 	{
@@ -372,7 +397,7 @@ public:
 	}
 	double* getEndValues(int varId = 0)
 	{
-		double* endVals = new double[vecSize * nrOfUnroll];
+		double* endVals = new double[vecSize ];
 
 		for (size_t i = 0; i < nrOfUnroll; i++)
 		{
@@ -392,349 +417,341 @@ public:
 	//calculate functions - alternative to set, it does the job itself
 	void calculateIntegrationMesh()
 	{
-		double* discC1Full = new double[nrOfC1 + 1];
-		discC1Full[0] = 0.0;
-		for (size_t i = 1; i < nrOfC1 + 1; i++)
+		double* discC0Full = new double[nrOfC0 + 1];
+		discC0Full[0] = 0.0;
+		for (size_t i = 1; i < nrOfC0 + 1; i++)
 		{
-			discC1Full[i] = discC1Init[i - 1];
+			discC0Full[i] = discC0Init[i - 1];
 		}
-		calculateFullIntegrationMesh(&mesh, &meshType, &meshLen, discC0Init, nrOfC0, discC1Full, nrOfC1 + 1, t0, nrOfDelays, tStart, meshPrecision);
+		calculateFullIntegrationMesh(&mesh, &meshType, &meshLen, discC0Full, nrOfC0 + 1, discC1Init, nrOfC1, t0, nrOfDelays, tStart, meshPrecision);
 		this->addMeshPoint(tEnd, 1);
-		delete discC1Full;
-	}
-	void calculateInitialTvals(double t0max)
-	{
-		double *tTmp = linspaceDisc(t0max, tStart, nrOfInitialPoints, discInit, nrOfDisc);
-		this->setInitialTvals(tTmp);
-	}
-	void calculateInitialXvals(double x0(double t, int dir), double xd0(double t, int dir), unsigned int xVarIndex, unsigned int xDenseVarIndex)
-	{
-		double* xTmp = discretize(x0, tVals, nrOfInitialPoints);
-		double* xdTmp = discretize(xd0, tVals, nrOfInitialPoints);
-		this->setInitialXvals(xTmp, xdTmp, xVarIndex, xDenseVarIndex);
 	}
 
 	//integration functions
-	void integrate(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	void integrate(void f(Vec4d* xd, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
+		// ---------------------------- Set everything to initial values -----------------------------------------
 		//initialize variables
 		t = tStart; //tStart -> t
-		memoryId = nrOfInitialPoints;
-		tVals[memoryId] = t;
-		for (size_t i = 0; i < nrOfUnroll; i++)
+		memoryId = 0;
+		dt = dtBase;
+		for (size_t i = 0; i < nrOfVars; i++)
 		{
-			//x0 -> x
-			for (size_t j = 0; j < nrOfVars; j++)
-			{
-				x[i * nrOfVars + j] = x0[i * nrOfVars + j];
-			}
-
-			//save dense output points
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				unsigned int varId = denseIdToVarId[j];
-				x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
-			}
+			x[i] = x0[i];
 		}
-		for (size_t i = 0; i < nrOfDelays; i++)
+		if (meshLen > 0)
+		{
+			nextMesh = mesh[0];
+		}
+
+		//save dense output points
+		t.store(denseT[memoryId]);
+		for (size_t i = 0; i < nrOfDenseVars; i++)
+		{
+			unsigned int varId = denseIdToVarId[i];
+			x[i].store(denseX[memoryId][i]);
+		}
+		for (size_t i = 0; i < nrOfDelays * vecSize; i++) //delay index prediction
 		{
 			lastIndex[i] = 0;
 		}
-		for (size_t i = 0; i < nrOfEvents; i++)
+		for (size_t i = 0; i < nrOfEvents; i++) //event handling
 		{
 			prevVals[i] = NAN;
 			newVals[i] = NAN;
 		}
-		meshId = 0;
+		for (size_t i = 0; i < vecSize; i++) //mesh
+		{
+			meshId[i] = 0;
+		}
+		
 
 		//integration
-		int stepType = 0;
 		//0 normal step
 		//1 simple mesh point
 		//2 double mesh point
-		//3 stepsize decrease because event, doesnt accept step
+		//3 stepsize decrease because event, decline step
 		//4 acceptable step near event
 		//5 event is found, we are after that
-		bool nearEvent = false;
-		while (t < tEnd)
+		//6 decline step
+		Vec4d stepType = 0;
+		Vec4db nearEvent = false;
+		Vec4d newDt = dtBase;
+		for(memoryId = 1; memoryId < nrOfSteps; memoryId++)
 		{
-			if (stepType == 0) //if no double point neccessary
+			for (size_t i = 0; i < vecSize; i++)
 			{
-				dt = dtBase;
-			}
-			if (stepType == 1) //if simple mesh step was successful
-			{
-				dt = dtBase;
-				stepType = 0;
-				meshId++;
-			}
-			if (stepType == 2) //if last step was a double mesh point
-			{
-				dt = 2 * meshPrecision;
-				stepType = 0;
-				meshId++;
-			}
-			if (nrOfEvents != 0 && stepType == 5) //dt should go back to normal
-			{
-				dt = dtBase;
-				stepType = 0;
-			}
-			if (nrOfEvents != 0 && stepType == 3) //dt = dt / 2 and flush lastIndex
-			{
-				dt = 0.5 * dt;
-				for (size_t i = 0; i < nrOfDelays; i++)
+				if (stepType[i] == 1 || stepType[i] == 2)
 				{
-					if(lastIndex[i] > eventFlushLookBack)
+					meshId[i]++;
+				}
+			}
+
+			dt = select(stepType == 0 | stepType == 1 | stepType == 5, newDt, dt); //when dt stays
+			dt = select(stepType == 2, 2 * meshPrecision, dt);
+			dt = select(stepType == 3, 0.5 * dt, dt);
+
+			stepType = select(stepType == 1 | stepType == 2 | stepType == 5, 0, stepType);
+			
+			
+			//event intervention
+			Vec4db eventI = stepType == 3 & dt < eventPrecision;
+
+			if (horizontal_add(eventI)) //if there is an event
+			{
+				stepType = select(eventI, 5, stepType);
+
+				//intervention in the integration
+				for (size_t j = 0; j < nrOfEvents; j++)
+				{
+					//check for positive direction of event
+					Vec4d tmp = prevVals[j] * newVals[j];
+					Vec4db mask = tmp < 0.0 && (prevVals[j] < newVals[j]);
+					prevVals[j] = select(mask, NAN, prevVals[j]);
+					int eventDir = 1;
+					eventIntervention(j, eventDir, mask, t, x, xDelay, p);
+
+					//check for negativ direction of event
+					mask = tmp < 0.0 && (prevVals[j] > newVals[j]);
+					prevVals[j] = select(mask, NAN, prevVals[j]);
+					eventDir = -1;
+					eventIntervention(j, eventDir, mask, t, x, xDelay, p);
+
+				}
+			}
+
+			//detecting a mesh point this part is not parallel :((((((((
+			for (size_t i = 0; i < vecSize; i++)
+			{
+				unsigned int id = meshId[i];
+				if (id < meshLen && mesh[id] <= t[i] + dt[i]) 
+				{
+					if (stepType[i] == 5) //forced step
 					{
-						lastIndex[i] -= eventFlushLookBack;
+						meshId[i]++;
 					}
 					else
 					{
-						lastIndex[i] = 0;
-					}
 
-				}
-				if (dt < eventPrecision)
-				{
-					stepType = 5;
-					nearEvent = false;
-					dt = eventPrecision;
-
-					//intervention in the integration
-					for (size_t i = 0; i < nrOfUnroll; i++) //go through unroll
-					{
-						for (size_t j = 0; j < nrOfEvents; j++)
+						int type = meshType[id];
+						if (type == 1)
 						{
-							//check for positive direction of event
-							Vec4d tmp = prevVals[nrOfEvents * i + j] * newVals[nrOfEvents * i + j];
-							Vec4db mask = tmp < 0.0 && (prevVals[nrOfEvents * i + j] < newVals[nrOfEvents * i + j]);
-							prevVals[nrOfEvents * i + j] = select(mask, NAN, prevVals[nrOfEvents * i + j]);
-							int eventDir = 1;
-							eventIntervention(j, eventDir, mask,t, x + nrOfVars * i, xDelay + nrOfDelays * i, p + nrOfParameters * i);
-
-							//check for negativ direction of event
-							mask = tmp < 0.0 && (prevVals[nrOfEvents * i + j] > newVals[nrOfEvents * i + j]);
-							prevVals[nrOfEvents * i + j] = select(mask, NAN, prevVals[nrOfEvents * i + j]);
-							eventDir = -1;
-							eventIntervention(j, eventDir, mask,t, x + nrOfVars * i, xDelay + nrOfDelays * i, p + nrOfParameters * i);
-
+							stepType.insert(i, 1);
+							dt.insert(i, mesh[id] - t[i]);
+						}
+						if (type == 2)
+						{
+							stepType.insert(i, 2);
+							dt.insert(i, mesh[id] - t[i] - meshPrecision);
 						}
 					}
 				}
 			}
 
-			//detecting a mesh point
-			if (meshId < meshLen && mesh[meshId] <= t + dt)
-			{
-				if(nrOfEvents != 0 && stepType == 5 ) //forced step
-				{
-					meshId++;
-				}
-				else
-				{
-					stepType = meshType[meshId];
-					if (stepType == 1)
-					{
-						dt = mesh[meshId] - t;
-					}
-					if (stepType == 2)
-					{
-						dt = mesh[meshId] - t - meshPrecision;
-					}
-				}
-			}//end of mesh detection
-
 			//RK4 step
-			RK4(f);
+			DP5(f);
 
 			//find event
-			if (nrOfEvents != 0 && stepType != 5) //optimized out if there's no event
+			if (nrOfEvents != 0) //optimized out if there's no event
 			{
 				uint64_t sum = 0;
 
-				//going through each variable to step for events
-				for (size_t i = 0; i < nrOfUnroll; i++)
+				//push values, if step was not flushed
+				for (size_t j = 0; j < nrOfEvents; j++)
 				{
-					//push values, if step was not flushed
-					if (stepType != 3)
-					{
-						for (size_t j = 0; j < nrOfEvents; j++)
-						{
-							prevVals[i * nrOfEvents + j] = newVals[i * nrOfEvents + j];
-						}
-					}
-					eventLocation(newVals + nrOfEvents * i, t, xTmp + nrOfVars * i, xDelay + nrOfVars * i, p + nrOfParameters * i);
-					//check for event
-					for (size_t j = 0; j < nrOfEvents; j++)
-					{
-						Vec4d prod = prevVals[i * nrOfEvents + j] * newVals[i * nrOfEvents + j];
-						Vec4db res = prod < 0; //1 when zero in the interval
-						sum += horizontal_add(res);
-					}
+					prevVals[j] = select(stepType != 3 & stepType != 5, newVals[j], prevVals[j]);
+				}
+				eventLocation(newVals, tTmp, x5, xDelay, p);
+
+				//check for event
+				Vec4db whereEvent = false;
+				for (size_t j = 0; j < nrOfEvents; j++)
+				{
+					Vec4d prod = prevVals[j] * newVals[j];
+					Vec4db res = prod < 0; //1 when zero in the interval
+					whereEvent = whereEvent | res;
 				}
 
-				//sum > 0, step through event, unaccaptable step
-				if (sum > 0)
-				{
-					stepType = 3;
-					nearEvent = true;
-				}
-				//near an event, but we dont reach that yet, stepsize should stay
-				if (sum == 0 && nearEvent == true)
-				{
-					stepType = 4;
-				}
+				//if a variable reached an event
+				nearEvent = select(whereEvent & stepType != 5, true, nearEvent);
+				stepType = select(whereEvent & stepType != 5, 3, stepType);
+				stepType = select(nearEvent & !whereEvent & stepType != 5, 4, stepType);
 			} //end of find event
 
-			//if step is acceptable
-			if (nrOfEvents == 0 || stepType != 3)
+			//calculate new dt
+			newDt = dtBase;
+
+			//check if step may be accepted
+
+			//accept or decline step
+			Vec4db acceptStep = stepType != 3 & stepType != 6;
+			t = select(acceptStep, tTmp, t);
+			for (size_t i = 0; i < nrOfVars; i++)
 			{
+				x[i] = select(acceptStep, x5[i], x[i]);
+			}
 
-				t += dt;
-				for (size_t i = 0; i < nrOfVars*nrOfUnroll; i++)
-				{
-					x[i] = xTmp[i];
-				}
 
-				//save end values
-				memoryId++;
-				tVals[memoryId] = t;
-				for (size_t i = 0; i < nrOfUnroll; i++)
-				{
-					//save dense output points
-					for (size_t j = 0; j < nrOfDenseVars; j++)
-					{
-						unsigned int varId = denseIdToVarId[j];
-						x[i * nrOfVars + varId].store(xVals[memoryId][j] + i * vecSize);
-					}
-				}
-			} //end of accept step
-		} //end of while
-	}//end of integrate
-
-	void DP5(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
-	{
-		//k1
-		calculateAllDelay(t);
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			f(&(kSum[nrOfVars * i]), t, &(x[nrOfVars * i]), &(xDelay[nrOfDelays * i]), &(p[nrOfParameters * i]));
-		}
-		//save dense output points
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
+			//save dense values
+			t.store(denseT[memoryId]);
 			for (size_t j = 0; j < nrOfDenseVars; j++)
 			{
 				unsigned int varId = denseIdToVarId[j];
-				kSum[i * nrOfVars + varId].store(xdVals[memoryId][j] + i * vecSize);
+				x [varId].store(denseX [memoryId][j]);
+				k1[varId].store(denseK1[memoryId-1][j]);
+				k2[varId].store(denseK2[memoryId-1][j]);
+				k3[varId].store(denseK3[memoryId-1][j]);
+				k4[varId].store(denseK4[memoryId-1][j]);
+				k5[varId].store(denseK5[memoryId-1][j]);
+				k6[varId].store(denseK6[memoryId-1][j]);
 			}
-		}
+
+			std::cout << "t=" << t[0] << "\tx=" << x[0][0] << "\tdt=" << dt[0] << "\tstep=" << stepType[0] << "\n";
+
+		} //end of while
+	}//end of integrate
+
+	void DP5(void f(Vec4d* xd, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	{
+		//k1
+		calculateAllDelay(t);
+		f(k1, t, x, xDelay, p);
 
 
 		//k2
-		tTmp = t + 0.5 * dt;
+		tTmp = t + c1 * dt;	//calculate new t
 		calculateAllDelay(tTmp);
-		for (size_t i = 0; i < nrOfVars * nrOfUnroll; i++)
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
 		{
-			xTmp[i] = x[i] + 0.5 * dt * kSum[i];
+			xTmp[i] = x[i] + dt * (a11 * k1[i]);
 		}
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			f(&(kAct[nrOfVars * i]), tTmp, &(xTmp[nrOfVars * i]), &(xDelay[nrOfDelays * i]), &(p[nrOfParameters * i]));
-		}
+		f(k2, tTmp, xTmp, xDelay, p);
+		
 
 		//k3
-		for (size_t i = 0; i < nrOfVars * nrOfUnroll; i++)
+		tTmp = t + c2 * dt;	//calculate new t
+		calculateAllDelay(tTmp);
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
 		{
-			kSum[i] += 2 * kAct[i];
-			xTmp[i] = x[i] + 0.5 * dt * kAct[i];
+			xTmp[i] = x[i] + dt * (a21 * k1[i] + a22 * k2[i]);
 		}
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			f(&(kAct[nrOfVars * i]), tTmp, &(xTmp[nrOfVars * i]), &(xDelay[nrOfDelays * i]), &(p[nrOfParameters * i]));
-		}
-
+		f(k3, tTmp, xTmp, xDelay, p);
 
 		//k4
-		tTmp = t + dt;
+		tTmp = t + c3 * dt;	//calculate new t
 		calculateAllDelay(tTmp);
-		for (size_t i = 0; i < nrOfVars * nrOfUnroll; i++)
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
 		{
-			kSum[i] += 2 * kAct[i];
-			xTmp[i] = x[i] + dt * kAct[i];
+			xTmp[i] = x[i] + dt * (a31 * k1[i] + a32 * k2[i] + a33 * k3[i]);
 		}
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			f(&(kAct[nrOfVars * i]), tTmp, &(xTmp[nrOfVars * i]), &(xDelay[nrOfDelays * i]), &(p[nrOfParameters * i]));
-		}
+		f(k4, tTmp, xTmp, xDelay, p);
 
-		for (size_t i = 0; i < nrOfVars * nrOfUnroll; i++)
+		//k5
+		tTmp = t + c4 * dt;	//calculate new t
+		calculateAllDelay(tTmp);
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
 		{
-			kSum[i] += kAct[i];
-			xTmp[i] = x[i] + (1. / 6.) * dt * kSum[i];
+			xTmp[i] = x[i] + dt * (a41 * k1[i] + a42 * k2[i] + a43 * k3[i] + a44 * k4[i]);
+		}
+		f(k5, tTmp, xTmp, xDelay, p);
+
+		//k6
+		tTmp = t + c5 * dt;	//calculate new t
+		calculateAllDelay(tTmp);
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
+		{
+			xTmp[i] = x[i] + dt * (a51 * k1[i] + a52 * k2[i] + a53 * k3[i] + a54 * k4[i] + a55 * k5[i]);
+		}
+		f(k6, tTmp, xTmp, xDelay, p);
+
+		//k7 === x5
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
+		{
+			xTmp[i] = x[i] + dt * (b51 * k1[i] + b52 * k2[i] + b53 * k3[i] + b54 * k4[i] + b55 * k5[i] + b56 * k6[i]);
+			x5[i] = xTmp[i];
+		}
+		f(k7, tTmp, xTmp, xDelay, p);
+
+		//x4
+		for (size_t i = 0; i < nrOfVars; i++) //calculate new x values
+		{
+			x4[i] = x[i] + dt * (b41 * k1[i] + b42 * k2[i] + b43 * k3[i] + b44 * k4[i] + b45 * k5[i] + b46 * k6[i] + b47 * k7[i]);
 		}
 	}
 	
 	//dense output
-	void denseOutput() //from values loaded into memory
+	void denseOutput(Vec4db mask, int delayId) //from values loaded into memory
 	{
-		for (size_t i = 0; i < nrOfUnroll  * nrOfDelays; i++)
-		{
-			Vec4d b1 = 
-		}
+		Vec4d b1 = theta[delayId] * (1 + theta[delayId] * ((-1337.0 / 480.0) + theta[delayId] * ((1039.0 / 360.0) - theta[delayId] * (1163.0 / 1152.0))));
+		Vec4d b2 = 0;
+		Vec4d b3 = theta[delayId] * theta[delayId] * ((4216.0 / 113.0) + theta[delayId] * ((-18728.0 / 3339.0) + theta[delayId] * (7580.0 / 3339.0)));
+		Vec4d b4 = theta[delayId] * theta[delayId] * ((-27.0 / 16.0) + theta[delayId] * (( 9.0 / 2.0) + theta[delayId] * (415.0 / 192.0)));
+		Vec4d b5 = theta[delayId] * theta[delayId] * ((-2187.0 / 8480.0) + theta[delayId] * ((2673.0 / 2120.0) + theta[delayId] * (8991.0 / 6784.0)));
+		Vec4d b6 = theta[delayId] * theta[delayId] * ((33.0 / 35.0) + theta[delayId] * ((-319.0 / 105.0) + theta[delayId] * (187.0 / 84.0)));
+		xDelay[delayId] = select(mask, lX[delayId] + lDt[delayId] * (b1 * lk1[delayId] + b2 * lk2[delayId] + b3 * lk3[delayId] + b4 * lk4[delayId] + b5 * lk5[delayId] + b6 * lk6[delayId]), xDelay[delayId]);
 	}
-
-	void calculatedenseOutput(double atT, int delayId)
+	void loadDenseOutput(double atT, int delayId, int vecId)
 	{
-
-
-
-		//load new step if neccessary
-		unsigned int id = lastIndex[delayId];
+		unsigned int linearIndex = delayId * vecSize + vecId;
+		unsigned int id = lastIndex[linearIndex];
 		unsigned int denseVar = delayIdToDenseId[delayId];
-		if (atT >= tVals[id]) //new step id needed
+
+		if (atT >= denseT[id][vecId])  //new values should be loaded
 		{
-			while (atT >= tVals[id]) //find next good value
+			while (atT >= denseT[id][vecId])//find next good value
 			{
 				id++;
 			}
-			lastIndex[delayId] = id--;
+			newLastIndex[linearIndex] = id--;
 
 			//load next step from memory
-			tb[delayId] = tVals[id];
-			deltat[delayId] = tVals[id + 1] - tb[delayId];
-			pdeltat[delayId] = 1.0 / deltat[delayId];
+			lk1[delayId].insert(vecId, denseK1[id][denseVar][vecId]);
+			lk2[delayId].insert(vecId, denseK2[id][denseVar][vecId]);
+			lk3[delayId].insert(vecId, denseK3[id][denseVar][vecId]);
+			lk4[delayId].insert(vecId, denseK4[id][denseVar][vecId]);
+			lk5[delayId].insert(vecId, denseK5[id][denseVar][vecId]);
+			lk6[delayId].insert(vecId, denseK6[id][denseVar][vecId]);
+			lX[delayId].insert(vecId, denseX[id][denseVar][vecId]);
 
-			//load from memory
-			for (size_t i = 0; i < nrOfUnroll; i++)
-			{
-				unsigned int linIndexOffset = nrOfDelays * i + delayId;
-				xb[linIndexOffset].load(xVals[id][denseVar] + i * vecSize);
-				xn[linIndexOffset].load(xVals[id + 1][denseVar] + i * vecSize);
-				xdb[linIndexOffset].load(xdVals[id][denseVar] + i * vecSize);
-				xdn[linIndexOffset].load(xdVals[id + 1][denseVar] + i * vecSize);
-			}
+			//calculate theta
+			double tBefore = denseT[id][vecId];
+			double dtStep = denseT[id + 1][vecId] - tBefore;
+			theta[delayId].insert(vecId, (atT - tBefore) / dtStep);
+			lDt[delayId].insert(vecId, dtStep);
 		}
 
-		//calculate dense output
-		double theta = (atT - tb[delayId]) * pdeltat[delayId];
-		double thetaM1 = theta - 1;
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			unsigned int linIndexOffset = nrOfDelays * i + delayId;
-			xDelay[linIndexOffset] = -thetaM1 * xb[linIndexOffset] + theta * (xn[linIndexOffset] + thetaM1 * ((1 - 2 * theta) * (xn[linIndexOffset] - xb[linIndexOffset]) + deltat[delayId] * (thetaM1 * xdb[linIndexOffset] + theta * xdn[linIndexOffset])));
-			}
 	}
-	void calculateAllDelay(Vec4d * atT)
+	void calculateAllDelay(Vec4d atT)
 	{
 		for (size_t i = 0; i < nrOfDelays; i++)
 		{
-			calculatedenseOutput(atT - t0[i], i);
+			//going through variables, this part is not vectorized :(
+			unsigned int denseId = delayIdToDenseId[i];
+			unsigned int varId = delayIdToVarId[i];
+			Vec4db mask;
+			for (size_t j = 0; j < vecSize; j++)
+			{
+				Vec4d getT = atT - t0[i];
+				loadDenseOutput(getT[j], i, j);
+				if (getT[j] <= tStart) //initial function
+				{
+					std::cout << "m";
+					mask.insert(j, false);
+					xDelay[i].insert(j, initialFunction[denseId](getT[j],0));
+				}
+				else //dense output
+				{
+					std::cout << "d";
+					mask.insert(j, true);
+				}
+			}
+			std::cout << " ";
+			denseOutput(mask,i);
 		}
 	}
 
 	//save functions
-	void save(std::string filename, unsigned int varId = 0,int precision = 16)
+	void save(std::string filename, unsigned int varId = 0, unsigned int vecId = 0, int precision = 16)
 	{
 		std::ofstream ofs(filename);
 		if (!ofs.is_open())
@@ -743,18 +760,10 @@ public:
 			return;
 		}
 		ofs << std::setprecision(precision);
-		for (size_t i = nrOfInitialPoints; i <= memoryId; i++)
+		for (size_t i = 0; i < memoryId; i++)
 		{
-			ofs << tVals[i] << "\t";
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				ofs << xVals[i][j][varId] << "\t";
-			}
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				ofs << xdVals[i][j][varId] << "\t";
-			}
-			ofs << std::endl;
+			ofs << denseT[i][vecId] << "\t";
+			ofs << denseX[i][varId][vecId] << std::endl;
 		}
 		ofs.flush();
 		ofs.close();
@@ -767,30 +776,6 @@ public:
 		for (size_t i = 0; i < meshLen; i++)
 		{
 			std::cout << mesh[i] << "\tType: " << meshType[i] << std::endl;
-		}
-	}
-	void printInitialPoints(int precision = 6)
-	{
-		std::cout << std::setprecision(precision) << "Number of initial points = " << nrOfInitialPoints << std::endl;
-		for (size_t i = 0; i < nrOfInitialPoints; i++)
-		{
-			std::cout << i << "\tt = " << std::setw(precision + 6) << tVals[i] << "\t x = ";
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				for (size_t k = 0; k < vecSize * nrOfUnroll; k++)
-				{
-					std::cout << std::setw(precision + 6) << xVals[i][j][k] << "\t";
-				}
-			}
-			std::cout << "xd = ";
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				for (size_t k = 0; k < vecSize * nrOfUnroll; k++)
-				{
-					std::cout << std::setw(precision + 6) << xdVals[i][j][k] << "\t";
-				}
-			}
-			std::cout << std::endl;
 		}
 	}
 	void printParameters(int precision = 6)
