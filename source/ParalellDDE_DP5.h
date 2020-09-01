@@ -6,6 +6,7 @@
 #include <string>
 #include <fstream>
 #include "C:/Users/nnagy/Documents/Egyetem/HDS/VCL/version2-2.01.02/vectorclass.h"
+#include "C:/Users/nnagy/Documents/Egyetem/HDS/VCL/version2-2.01.02/vectormath_exp.h"
 #include "ParalellDDE_Common.cpp"
 #include "DP5_Constants.h"
 #define vecSize 4
@@ -52,7 +53,9 @@ private:
 	Vec4d t, dt; //synchronized for all threads
 
 	//initial condition
-	Vec4d * x0;
+	Vec4d* x0;
+	Vec4d* endvals;
+	Vec4d stepCounter;
 
 	//temporary integration variables
 	Vec4d *__restrict k1, * __restrict k2, * __restrict k3, * __restrict k4, * __restrict k5, * __restrict k6, * __restrict k7;
@@ -89,10 +92,13 @@ private:
 
 	//adaptive solver
 	double absTol, relTol;
+	double dtMin, dtMax;
+	double boundIncrease, boundDecrease;
+	double safetyFactor;
 
 public:
 	//constructor
-	ParalellDDE_DP5() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10)
+	ParalellDDE_DP5() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfSteps(100), dtBase(0.2), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), absTol(1e-6), relTol(1e-6), dtMin(1e-10), dtMax(1e6), boundDecrease(0.1), boundIncrease(10.0), safetyFactor(0.8)
 	{
 		//initial function
 		initialFunction = new funcSlot[nrOfDenseVars];
@@ -113,6 +119,7 @@ public:
 		//integration
 		p = new Vec4d[nrOfParameters];
 		x = new Vec4d[nrOfVars];
+		endvals = new Vec4d[nrOfVars];
 		x0 = new Vec4d[nrOfVars];
 		x4 = new Vec4d[nrOfVars];
 		x5 = new Vec4d[nrOfVars];
@@ -149,6 +156,32 @@ public:
 	}; //does nothing
 
 	//set functions
+	void setSolverTol(double absTol, double relTol)
+	{
+		this->absTol = absTol;
+		this->relTol = relTol;
+	}
+	void setGlobalTol(double tol)
+	{
+		this->absTol = tol;
+		this->relTol = tol;
+		this->meshPrecision = tol;
+		this->eventPrecision = tol;
+	}
+	void setStepSizeBounds(double dtMin, double dtMax)
+	{
+		this->dtMin = dtMin;
+		this->dtMax = dtMax;
+	}
+	void setStepSizeChangeBounds(double decrease, double increase)
+	{
+		this->boundIncrease = increase;
+		this->boundDecrease = decrease;
+	}
+	void setSafetyFactor(double safetyFactor)
+	{
+		this->safetyFactor = safetyFactor;
+	}
 	void setIntegrationRange(double tStart, double tEnd)
 	{
 		this->tStart = tStart;
@@ -397,21 +430,26 @@ public:
 	}
 	double* getEndValues(int varId = 0)
 	{
-		double* endVals = new double[vecSize ];
+		double* endVals = new double[vecSize];
 
-		for (size_t i = 0; i < nrOfUnroll; i++)
+		for (size_t j = 0; j < vecSize; j++)
 		{
-			for (size_t j = 0; j < vecSize; j++)
-			{
-				int id = i * vecSize + j;
-				endVals[id] = x[nrOfVars * i + varId][j];
-			}
+			endVals[j] = this->endvals[varId][j];
 		}
 		return endVals;
 	}
 	double getT()
 	{
 		return t;
+	}
+	int* getStepCount()
+	{
+		int* stepCount = new int[vecSize];
+		for (size_t i = 0; i < vecSize; i++)
+		{
+			stepCount[i] = int(this->stepCounter[i]);
+		}
+		return stepCount;
 	}
 
 	//calculate functions - alternative to set, it does the job itself
@@ -438,6 +476,7 @@ public:
 		for (size_t i = 0; i < nrOfVars; i++)
 		{
 			x[i] = x0[i];
+			endvals[i] = 0;
 		}
 		if (meshLen > 0)
 		{
@@ -454,6 +493,7 @@ public:
 		for (size_t i = 0; i < nrOfDelays * vecSize; i++) //delay index prediction
 		{
 			lastIndex[i] = 0;
+			newLastIndex[i] = 0;
 		}
 		for (size_t i = 0; i < nrOfEvents; i++) //event handling
 		{
@@ -465,7 +505,6 @@ public:
 			meshId[i] = 0;
 		}
 		
-
 		//integration
 		//0 normal step
 		//1 simple mesh point
@@ -474,9 +513,11 @@ public:
 		//4 acceptable step near event
 		//5 event is found, we are after that
 		//6 decline step
+		//7 dt should reset
 		Vec4d stepType = 0;
-		Vec4db nearEvent = false;
+		Vec4d nearEvent = 0;
 		Vec4d newDt = dtBase;
+		Vec4d saved = 0;
 		for(memoryId = 1; memoryId < nrOfSteps; memoryId++)
 		{
 			for (size_t i = 0; i < vecSize; i++)
@@ -487,11 +528,13 @@ public:
 				}
 			}
 
-			dt = select(stepType == 0 | stepType == 1 | stepType == 5, newDt, dt); //when dt stays
+			dt = select(stepType == 0 | stepType == 6, newDt, dt); //when dt stays
+			dt = select(stepType == 1 | stepType == 5 | stepType == 7, dtBase, dt); //reset dt
 			dt = select(stepType == 2, 2 * meshPrecision, dt);
 			dt = select(stepType == 3, 0.5 * dt, dt);
 
-			stepType = select(stepType == 1 | stepType == 2 | stepType == 5, 0, stepType);
+			stepType = select(stepType == 1 | stepType == 5 | stepType == 6, 0, stepType);
+			stepType = select(stepType == 2, 7, stepType);
 			
 			
 			//event intervention
@@ -573,24 +616,55 @@ public:
 				}
 
 				//if a variable reached an event
-				nearEvent = select(whereEvent & stepType != 5, true, nearEvent);
+				nearEvent = select(whereEvent & stepType != 5., 1, nearEvent);
 				stepType = select(whereEvent & stepType != 5, 3, stepType);
-				stepType = select(nearEvent & !whereEvent & stepType != 5, 4, stepType);
+				stepType = select(nearEvent == 1 & !whereEvent & stepType != 5, 4, stepType);
 			} //end of find event
 
 			//calculate new dt
-			newDt = dtBase;
+			Vec4d minRelativeErrorReciprok = boundIncrease;
+			for (size_t i = 0; i < nrOfVars; i++)
+			{
+				Vec4d errori = select(x4[i] < x5[i],x5[i] - x4[i], x4[i]-x5[i]);
+				Vec4d tolerancei = absTol + select(x5[i]<0,-x5[i],x5[i]) * relTol;
+				minRelativeErrorReciprok = min(minRelativeErrorReciprok, tolerancei / errori);
+			}
+			Vec4d changeFactor = 0.8*pow<double>(minRelativeErrorReciprok, 0.2);
+			//check change factor bounds
+			changeFactor = select(changeFactor < boundDecrease, boundDecrease, changeFactor);
+			changeFactor = select(changeFactor > boundIncrease, boundIncrease, changeFactor);
+			//new dt
+			newDt = changeFactor * dt;
+			//check dt bounds
+			newDt = select(newDt < dtMin, dtMin, newDt);
+			newDt = select(newDt > dtMax, dtMax, newDt);
 
-			//check if step may be accepted
+			//check if step should be rejected
+			stepType = select(minRelativeErrorReciprok < 1.0, 6, stepType);
+			//check if dt is already small
+			stepType = select(dt <= dtMin, 0, stepType);
 
 			//accept or decline step
-			Vec4db acceptStep = stepType != 3 & stepType != 6;
+			Vec4db acceptStep = (stepType != 3 & stepType != 6) | stepType == 2;
 			t = select(acceptStep, tTmp, t);
 			for (size_t i = 0; i < nrOfVars; i++)
 			{
 				x[i] = select(acceptStep, x5[i], x[i]);
 			}
 
+			//if step accepted load new 
+			for (size_t i = 0; i < nrOfDelays; i++)
+			{
+				for (size_t j = 0; j < vecSize; j++)
+				{
+					unsigned int linearIndex = i * vecSize + j;
+					if (acceptStep[j] == 1 && newLastIndex[linearIndex] > 1)
+					{
+						lastIndex[linearIndex] = newLastIndex[linearIndex] - 1;
+					}
+				}
+			}
+			
 
 			//save dense values
 			t.store(denseT[memoryId]);
@@ -606,11 +680,42 @@ public:
 				k6[varId].store(denseK6[memoryId-1][j]);
 			}
 
-			std::cout << "t=" << t[0] << "\tx=" << x[0][0] << "\tdt=" << dt[0] << "\tstep=" << stepType[0] << "\n";
+			/*std::cout << "0:  t=" << t[0] << "\tx=" << x[0][0] << "\tdt=" << dt[0] << "\t"; 
+			std::cout << "1:  t=" << t[1] << "\tx=" << x[0][1] << "\tdt=" << dt[1] << "\t"; 
+			std::cout << "2:  t=" << t[2] << "\tx=" << x[0][2] << "\tdt=" << dt[2] << "\t"; 
+			std::cout << "3:  t=" << t[3] << "\tx=" << x[0][3] << "\tdt=" << dt[3] << "\n";*/
+			//std::cout << "t=" << t[1] << "\tx=" << x[0][1] << "\tdt=" << dt[1] << "\tk1="<<k1[0][1]<< "\tstep=" << stepType[0] << "\tError: "<<minRelativeErrorReciprok[0]<< "\n";
+			/*std::cout << "\tk1= " << k1[0][0];
+			std::cout << "\tk2= " << k2[0][0];
+			std::cout << "\tk3= " << k3[0][0];
+			std::cout << "\tk4= " << k4[0][0];
+			std::cout << "\tk5= " << k5[0][0];
+			std::cout << "\tk6= " << k6[0][0];
+			std::cout << "\tid= " << memoryId;
+			std::cout << std::endl;*/
+
+			//check end
+			if (horizontal_add(t >= tEnd))
+			{
+				for (size_t i = 0; i < nrOfVars; i++)
+				{
+					endvals[i] = select(saved == 1, endvals[i], x[i]);
+					//std::cout << endvals[i][0] << std::endl;
+				}
+				stepCounter = select(saved == 1, stepCounter, double(memoryId));
+				saved = select(t >= tEnd, 1, 0);
+				/*std::cout << saved[0] << "\t" << saved[1] << "\t" << saved[2] << "\t" << saved[3] << "\t" << "\n";
+				std::cout << stepCounter[0] << "\t" << stepCounter[1] << "\t" << stepCounter[2] << "\t" << stepCounter[3] << "\t" << "\n";
+				std::cout << endvals[0][0] << "\t" << endvals[0][1] << "\t" << endvals[0][2] << "\t" << endvals[0][3] << "\t" << "\n";*/
+				if (horizontal_and(t >= tEnd))
+				{
+					//std::cout << t[0] << "\t" << t[1] << "\t" << t[2] << "\t" << t[3] << "\t";
+					break;
+				}
+			}
 
 		} //end of while
 	}//end of integrate
-
 	void DP5(void f(Vec4d* xd, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		//k1
@@ -684,11 +789,12 @@ public:
 	{
 		Vec4d b1 = theta[delayId] * (1 + theta[delayId] * ((-1337.0 / 480.0) + theta[delayId] * ((1039.0 / 360.0) - theta[delayId] * (1163.0 / 1152.0))));
 		Vec4d b2 = 0;
-		Vec4d b3 = theta[delayId] * theta[delayId] * ((4216.0 / 113.0) + theta[delayId] * ((-18728.0 / 3339.0) + theta[delayId] * (7580.0 / 3339.0)));
-		Vec4d b4 = theta[delayId] * theta[delayId] * ((-27.0 / 16.0) + theta[delayId] * (( 9.0 / 2.0) + theta[delayId] * (415.0 / 192.0)));
-		Vec4d b5 = theta[delayId] * theta[delayId] * ((-2187.0 / 8480.0) + theta[delayId] * ((2673.0 / 2120.0) + theta[delayId] * (8991.0 / 6784.0)));
+		Vec4d b3 = theta[delayId] * theta[delayId] * ((4216.0 / 1113.0) + theta[delayId] * ((-18728.0 / 3339.0) + theta[delayId] * (7580.0 / 3339.0)));
+		Vec4d b4 = theta[delayId] * theta[delayId] * ((-27.0 / 16.0) + theta[delayId] * (( 9.0 / 2.0) - theta[delayId] * (415.0 / 192.0)));
+		Vec4d b5 = theta[delayId] * theta[delayId] * ((-2187.0 / 8480.0) + theta[delayId] * ((2673.0 / 2120.0) - theta[delayId] * (8991.0 / 6784.0)));
 		Vec4d b6 = theta[delayId] * theta[delayId] * ((33.0 / 35.0) + theta[delayId] * ((-319.0 / 105.0) + theta[delayId] * (187.0 / 84.0)));
-		xDelay[delayId] = select(mask, lX[delayId] + lDt[delayId] * (b1 * lk1[delayId] + b2 * lk2[delayId] + b3 * lk3[delayId] + b4 * lk4[delayId] + b5 * lk5[delayId] + b6 * lk6[delayId]), xDelay[delayId]);
+		Vec4d tmp = lX[delayId] + lDt[delayId] * (b1 * lk1[delayId] + b2 * lk2[delayId] + b3 * lk3[delayId] + b4 * lk4[delayId] + b5 * lk5[delayId] + b6 * lk6[delayId]);
+		xDelay[delayId] = select(mask,tmp , xDelay[delayId]);
 	}
 	void loadDenseOutput(double atT, int delayId, int vecId)
 	{
@@ -733,21 +839,21 @@ public:
 			{
 				Vec4d getT = atT - t0[i];
 				loadDenseOutput(getT[j], i, j);
+				//std::cout << "atT=" << getT[j] << " Theta=" << theta[0][0] << " x=" << lX[0][0] << std::endl;
 				if (getT[j] <= tStart) //initial function
 				{
-					std::cout << "m";
 					mask.insert(j, false);
 					xDelay[i].insert(j, initialFunction[denseId](getT[j],0));
 				}
 				else //dense output
 				{
-					std::cout << "d";
 					mask.insert(j, true);
 				}
 			}
-			std::cout << " ";
+			//std::cout << mask[0] << mask[1] << mask[2] << mask[3] << "\n";
 			denseOutput(mask,i);
 		}
+		//std::cout << "t=" << atT[0] << " xd= "<< xDelay[0][1] <<  std::endl;
 	}
 
 	//save functions
