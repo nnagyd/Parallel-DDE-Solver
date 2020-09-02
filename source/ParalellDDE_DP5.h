@@ -20,8 +20,8 @@ private:
 	unsigned int memoryId;
 
 	//integration memory to every variable with dense output
-	double*** __restrict denseK1, *** __restrict denseK2, *** __restrict denseK3, *** __restrict denseK4, *** __restrict denseK5;
-	double***__restrict denseK6, *** __restrict denseX, ** __restrict denseT;
+	double***  denseK1, ***  denseK2, ***  denseK3, ***  denseK4, ***  denseK5;
+	double*** denseK6, ***  denseX, **  denseT;
 	/*
 	Integration memory layout
 	length of outer dimension:	denseOutputMemorySize
@@ -49,7 +49,7 @@ private:
 	unsigned int delayIdToVarId[nrOfDenseVars]; //	lookup table:	delay index	-> variable index
 
 	//dynamic integration variables
-	Vec4d *__restrict x;
+	Vec4d * x;
 	Vec4d t, dt; //synchronized for all threads
 
 	//initial condition
@@ -58,22 +58,18 @@ private:
 	Vec4d stepCounter;
 
 	//temporary integration variables
-	Vec4d *__restrict k1, * __restrict k2, * __restrict k3, * __restrict k4, * __restrict k5, * __restrict k6, * __restrict k7;
-	Vec4d *__restrict xTmp, * __restrict xDelay, * __restrict x4, * __restrict x5, tTmp;
-	/*
-	integration variable layout
-	indexing: unroll*nrOfvars + var
-	*/
+	Vec4d * k1, *  k2, *  k3, *  k4, *  k5, *  k6, *  k7;
+	Vec4d * xTmp, *  xDelay, *  x4, *  x5, tTmp;
 
 	//dense output memory -> to every delay
-	Vec4d * __restrict lk1, * __restrict lk2, * __restrict lk3, * __restrict lk4, * __restrict lk5, * __restrict lk6, * __restrict theta, * __restrict lX, * __restrict lDt;
-	unsigned int * __restrict lastIndex, * __restrict newLastIndex;
+	Vec4d *  lk1, *  lk2, *  lk3, *  lk4, *  lk5, *  lk6, *  theta, *  lX, *  lDt;
+	unsigned int *  lastIndex, *  newLastIndex;
 
 	//user given integration range
 	double tStart, tEnd, dtBase;
 
 	//parameters
-	Vec4d * __restrict p;
+	Vec4d *  p;
 
 	//initial discontinouities
 	double* discC0Init, *discC1Init, *discInit;
@@ -85,6 +81,7 @@ private:
 
 	//event stuff
 	Vec4d* prevVals;
+	Vec4d* prevprevVals;
 	Vec4d* newVals;
 	double eventPrecision;
 	void (*eventLocation)(Vec4d* lst, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p);
@@ -114,11 +111,11 @@ public:
 
 		//events
 		prevVals = new Vec4d[nrOfEvents];
+		prevprevVals = new Vec4d[nrOfEvents];
 		newVals = new Vec4d[nrOfEvents];
 
 		//integration
 		p = new Vec4d[nrOfParameters];
-		x = new Vec4d[nrOfVars];
 		endvals = new Vec4d[nrOfVars];
 		x0 = new Vec4d[nrOfVars];
 		x4 = new Vec4d[nrOfVars];
@@ -132,6 +129,8 @@ public:
 		k7 = new Vec4d[nrOfVars];
 		xTmp = new Vec4d[nrOfVars];
 		xDelay = new Vec4d[nrOfDelays];
+
+		x = new Vec4d[nrOfVars];
 		
 		//dense output
 		lk1 =   new Vec4d[nrOfDelays];
@@ -151,8 +150,7 @@ public:
 	//destruktor
 	~ParalellDDE_DP5()
 	{
-		/*delete p, x, x0, kAct, kSum, xTmp, xDelay;
-		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;*/
+
 	}; //does nothing
 
 	//set functions
@@ -199,55 +197,6 @@ public:
 	void setNrOfDisc(unsigned int nrOfDisc)
 	{
 		this->nrOfDisc = nrOfDisc;
-	}
-	void allocateMemory()
-	{
-		//allocate arrays
-		this->denseT = new double* [nrOfSteps];
-		this->denseX = new double** [nrOfSteps];
-		this->denseK1 = new double** [nrOfSteps];
-		this->denseK2 = new double** [nrOfSteps];
-		this->denseK3 = new double** [nrOfSteps];
-		this->denseK4 = new double** [nrOfSteps];
-		this->denseK5 = new double** [nrOfSteps];
-		this->denseK6 = new double ** [nrOfSteps];
-
-		for (size_t i = 0; i < nrOfSteps; i++)
-		{
-			this->denseT [i] = new double[vecSize];
-			for (size_t j = 0; j < vecSize; j++)
-			{
-				this->denseT[i][j] = NAN;
-			}
-			this->denseX [i] = new double* [nrOfDenseVars];
-			this->denseK1[i] = new double* [nrOfDenseVars];
-			this->denseK2[i] = new double* [nrOfDenseVars];
-			this->denseK3[i] = new double* [nrOfDenseVars];
-			this->denseK4[i] = new double* [nrOfDenseVars];
-			this->denseK5[i] = new double* [nrOfDenseVars];
-			this->denseK6[i] = new double* [nrOfDenseVars];
-			for (size_t j = 0; j < nrOfDenseVars; j++)
-			{
-				this->denseX [i][j] = new double[vecSize];
-				this->denseK1[i][j] = new double[vecSize];
-				this->denseK2[i][j] = new double[vecSize];
-				this->denseK3[i][j] = new double[vecSize];
-				this->denseK4[i][j] = new double[vecSize];
-				this->denseK5[i][j] = new double[vecSize];
-				this->denseK6[i][j] = new double[vecSize];
-				for (size_t k = 0; k < vecSize; k++)
-				{
-					this->denseX[i][j] [k]=	NAN;
-					this->denseK1[i][j][k] =NAN;
-					this->denseK2[i][j][k] =NAN;
-					this->denseK3[i][j][k] =NAN;
-					this->denseK4[i][j][k] =NAN;
-					this->denseK5[i][j][k] =NAN;
-					this->denseK6[i][j][k] =NAN;
-				}
-			}
-
-		}
 	}
 	void setInitialDisc(double* C1disc, unsigned int nrOfC1, double* C0disc, unsigned int nrOfC0)
 	{
@@ -305,24 +254,18 @@ public:
 	}
 	void setX0(double x0)
 	{
-		for (size_t i = 0; i < nrOfUnroll * nrOfVars; i++)
+		for (size_t i = 0; i < nrOfVars; i++)
 		{
 			this->x0[i] = x0;
 		}
 	}
 	void setX0(double* x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
 	{
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			this->x0[nrOfVars * i + varId].load(x0 + 4 * i);
-		}
+		this->x0[varId].load(x0);
 	}
 	void setX0(double x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
 	{
-		for (size_t i = 0; i < nrOfUnroll; i++)
-		{
-			this->x0[nrOfVars * i + varId] = x0;
-		}
+		this->x0[varId] = x0;
 	}
 	void addMeshPoint(double t, int type)
 	{
@@ -392,11 +335,11 @@ public:
 	}
 
 	//event functions
-	void addEventLocationFunction(void (*eventLocation)(Vec4d* lst, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	void addEventLocationFunction(void (*eventLocation)(Vec4d* lst, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		this->eventLocation = eventLocation;
 	}
-	void addEventInterventionFunction(void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	void addEventInterventionFunction(void (*eventIntervention)(int eventId, int eventDir, Vec4db mask, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		this->eventIntervention = eventIntervention;
 	}
@@ -468,7 +411,6 @@ public:
 	//integration functions
 	void integrate(void f(Vec4d* xd, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
-		// ---------------------------- Set everything to initial values -----------------------------------------
 		//initialize variables
 		t = tStart; //tStart -> t
 		memoryId = 0;
@@ -488,7 +430,7 @@ public:
 		for (size_t i = 0; i < nrOfDenseVars; i++)
 		{
 			unsigned int varId = denseIdToVarId[i];
-			x[i].store(denseX[memoryId][i]);
+			x[varId].store(denseX[memoryId][i]);
 		}
 		for (size_t i = 0; i < nrOfDelays * vecSize; i++) //delay index prediction
 		{
@@ -497,6 +439,7 @@ public:
 		}
 		for (size_t i = 0; i < nrOfEvents; i++) //event handling
 		{
+			prevprevVals[i] = NAN;
 			prevVals[i] = NAN;
 			newVals[i] = NAN;
 		}
@@ -533,33 +476,31 @@ public:
 			dt = select(stepType == 2, 2 * meshPrecision, dt);
 			dt = select(stepType == 3, 0.5 * dt, dt);
 
-			stepType = select(stepType == 1 | stepType == 5 | stepType == 6, 0, stepType);
+			stepType = select(stepType == 1 | stepType == 5 | stepType == 6 | stepType == 7, 0, stepType);
 			stepType = select(stepType == 2, 7, stepType);
-			
-			
+
 			//event intervention
 			Vec4db eventI = stepType == 3 & dt < eventPrecision;
 
 			if (horizontal_add(eventI)) //if there is an event
 			{
 				stepType = select(eventI, 5, stepType);
-
+				nearEvent = select(stepType == 5, 0, nearEvent); //near event set to false
 				//intervention in the integration
 				for (size_t j = 0; j < nrOfEvents; j++)
 				{
 					//check for positive direction of event
 					Vec4d tmp = prevVals[j] * newVals[j];
-					Vec4db mask = tmp < 0.0 && (prevVals[j] < newVals[j]);
+					Vec4db mask = tmp < 0.0 & (prevVals[j] < newVals[j]) & eventI;
 					prevVals[j] = select(mask, NAN, prevVals[j]);
 					int eventDir = 1;
 					eventIntervention(j, eventDir, mask, t, x, xDelay, p);
 
 					//check for negativ direction of event
-					mask = tmp < 0.0 && (prevVals[j] > newVals[j]);
+					mask = tmp < 0.0 & (prevVals[j] > newVals[j]) & eventI;
 					prevVals[j] = select(mask, NAN, prevVals[j]);
 					eventDir = -1;
 					eventIntervention(j, eventDir, mask, t, x, xDelay, p);
-
 				}
 			}
 
@@ -597,28 +538,26 @@ public:
 			//find event
 			if (nrOfEvents != 0) //optimized out if there's no event
 			{
-				uint64_t sum = 0;
-
-				//push values, if step was not flushed
-				for (size_t j = 0; j < nrOfEvents; j++)
+				for (size_t i = 0; i < nrOfEvents; i++)
 				{
-					prevVals[j] = select(stepType != 3 & stepType != 5, newVals[j], prevVals[j]);
+					prevprevVals[i] = select(stepType == 0 || stepType == 4, prevVals[i], prevprevVals[i]);
+					prevVals[i] = select(stepType == 0 || stepType == 4, newVals[i], prevVals[i]);
 				}
+
 				eventLocation(newVals, tTmp, x5, xDelay, p);
 
 				//check for event
-				Vec4db whereEvent = false;
+				Vec4d whereEvent = 0.0;
 				for (size_t j = 0; j < nrOfEvents; j++)
 				{
 					Vec4d prod = prevVals[j] * newVals[j];
-					Vec4db res = prod < 0; //1 when zero in the interval
-					whereEvent = whereEvent | res;
+					whereEvent = select(whereEvent == 1.0 | prod < 0, 1.0, 0.0);
 				}
 
 				//if a variable reached an event
-				nearEvent = select(whereEvent & stepType != 5., 1, nearEvent);
-				stepType = select(whereEvent & stepType != 5, 3, stepType);
-				stepType = select(nearEvent == 1 & !whereEvent & stepType != 5, 4, stepType);
+				nearEvent = select(whereEvent == 1 & stepType != 5., 1, nearEvent);
+				stepType = select(whereEvent == 1 & stepType != 5, 3, stepType);
+				stepType = select(nearEvent == 1 & whereEvent == 0 & stepType != 5, 4, stepType);
 			} //end of find event
 
 			//calculate new dt
@@ -651,6 +590,13 @@ public:
 			{
 				x[i] = select(acceptStep, x5[i], x[i]);
 			}
+			//if declined reset prevvals with prevprevVals
+			for (size_t i = 0; i < nrOfEvents; i++)
+			{
+				newVals[i] = select(stepType == 6, prevVals[i], newVals[i]);
+				prevVals[i] = select(stepType == 6, prevprevVals[i], prevVals[i]);
+			}
+
 
 			//if step accepted load new 
 			for (size_t i = 0; i < nrOfDelays; i++)
@@ -680,44 +626,101 @@ public:
 				k6[varId].store(denseK6[memoryId-1][j]);
 			}
 
-			/*std::cout << "0:  t=" << t[0] << "\tx=" << x[0][0] << "\tdt=" << dt[0] << "\t"; 
-			std::cout << "1:  t=" << t[1] << "\tx=" << x[0][1] << "\tdt=" << dt[1] << "\t"; 
-			std::cout << "2:  t=" << t[2] << "\tx=" << x[0][2] << "\tdt=" << dt[2] << "\t"; 
-			std::cout << "3:  t=" << t[3] << "\tx=" << x[0][3] << "\tdt=" << dt[3] << "\n";*/
-			//std::cout << "t=" << t[1] << "\tx=" << x[0][1] << "\tdt=" << dt[1] << "\tk1="<<k1[0][1]<< "\tstep=" << stepType[0] << "\tError: "<<minRelativeErrorReciprok[0]<< "\n";
-			/*std::cout << "\tk1= " << k1[0][0];
-			std::cout << "\tk2= " << k2[0][0];
-			std::cout << "\tk3= " << k3[0][0];
-			std::cout << "\tk4= " << k4[0][0];
-			std::cout << "\tk5= " << k5[0][0];
-			std::cout << "\tk6= " << k6[0][0];
-			std::cout << "\tid= " << memoryId;
-			std::cout << std::endl;*/
-
 			//check end
 			if (horizontal_add(t >= tEnd))
 			{
 				for (size_t i = 0; i < nrOfVars; i++)
 				{
 					endvals[i] = select(saved == 1, endvals[i], x[i]);
-					//std::cout << endvals[i][0] << std::endl;
 				}
 				stepCounter = select(saved == 1, stepCounter, double(memoryId));
 				saved = select(t >= tEnd, 1, 0);
-				/*std::cout << saved[0] << "\t" << saved[1] << "\t" << saved[2] << "\t" << saved[3] << "\t" << "\n";
-				std::cout << stepCounter[0] << "\t" << stepCounter[1] << "\t" << stepCounter[2] << "\t" << stepCounter[3] << "\t" << "\n";
-				std::cout << endvals[0][0] << "\t" << endvals[0][1] << "\t" << endvals[0][2] << "\t" << endvals[0][3] << "\t" << "\n";*/
 				if (horizontal_and(t >= tEnd))
 				{
-					//std::cout << t[0] << "\t" << t[1] << "\t" << t[2] << "\t" << t[3] << "\t";
 					break;
 				}
 			}
 
 		} //end of while
 	}//end of integrate
+
+	//save functions
+	void save(std::string filename, unsigned int varId = 0, unsigned int vecId = 0, int precision = 16)
+	{
+		std::ofstream ofs(filename);
+		if (!ofs.is_open())
+		{
+			std::cout << "Cannot open file: " << filename << std::endl;
+			return;
+		}
+		ofs << std::setprecision(precision);
+		for (size_t i = 0; i < memoryId; i++)
+		{
+			ofs << denseT[i][vecId] << "\t";
+			ofs << denseX[i][varId][vecId] << std::endl;
+		}
+		ofs.flush();
+		ofs.close();
+	}
+
+	//debug functions
+	void printMesh(int precision = 6)
+	{
+		std::cout << std::setprecision(precision) << "Mesh Length = " << meshLen << std::endl;
+		for (size_t i = 0; i < meshLen; i++)
+		{
+			std::cout << mesh[i] << "\tType: " << meshType[i] << std::endl;
+		}
+	}
+	void printParameters(int precision = 6)
+	{
+		std::cout << std::setprecision(precision) << "Number of parameters = " << nrOfParameters << std::endl;
+
+		for (size_t i = 0; i < nrOfParameters; i++)
+		{
+			std::cout << "Parameter 1:" << std::endl;
+			for (size_t j = 0; j < nrOfUnroll; j++)
+			{
+				for (size_t k = 0; k < vecSize; k++)
+				{
+					std::cout << p[j * nrOfParameters + i][k] << std::endl;
+				}
+			}
+			std::cout << std::endl;
+		}
+	}
+	void printLookupTables()
+	{
+		std::cout << " Var id -> dense id" << std::endl;
+		for (size_t i = 0; i < nrOfVars; i++)
+		{
+			std::cout << "x" << i << " -> dense" << varIdToDenseId[i] << std::endl;
+		}
+
+		std::cout << " dense id -> var id" << std::endl;
+		for (size_t i = 0; i < nrOfDenseVars; i++)
+		{
+			std::cout << "dense" << i << " -> x" << denseIdToVarId[i] << std::endl;
+		}
+
+		std::cout << " delay id -> var id" << std::endl;
+		for (size_t i = 0; i < nrOfDelays; i++)
+		{
+			std::cout << "delay" << i << " -> x" << delayIdToVarId[i] << std::endl;
+		}
+
+		std::cout << " delay id -> dense id" << std::endl;
+		for (size_t i = 0; i < nrOfDelays; i++)
+		{
+			std::cout << "delay" << i << " -> dense" << delayIdToDenseId[i] << std::endl;
+		}
+	}
+
+private:
+	//inside functions
 	void DP5(void f(Vec4d* xd, Vec4d t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
+
 		//k1
 		calculateAllDelay(t);
 		f(k1, t, x, xDelay, p);
@@ -731,7 +734,7 @@ public:
 			xTmp[i] = x[i] + dt * (a11 * k1[i]);
 		}
 		f(k2, tTmp, xTmp, xDelay, p);
-		
+
 
 		//k3
 		tTmp = t + c2 * dt;	//calculate new t
@@ -783,18 +786,16 @@ public:
 			x4[i] = x[i] + dt * (b41 * k1[i] + b42 * k2[i] + b43 * k3[i] + b44 * k4[i] + b45 * k5[i] + b46 * k6[i] + b47 * k7[i]);
 		}
 	}
-	
-	//dense output
 	void denseOutput(Vec4db mask, int delayId) //from values loaded into memory
 	{
 		Vec4d b1 = theta[delayId] * (1 + theta[delayId] * ((-1337.0 / 480.0) + theta[delayId] * ((1039.0 / 360.0) - theta[delayId] * (1163.0 / 1152.0))));
 		Vec4d b2 = 0;
 		Vec4d b3 = theta[delayId] * theta[delayId] * ((4216.0 / 1113.0) + theta[delayId] * ((-18728.0 / 3339.0) + theta[delayId] * (7580.0 / 3339.0)));
-		Vec4d b4 = theta[delayId] * theta[delayId] * ((-27.0 / 16.0) + theta[delayId] * (( 9.0 / 2.0) - theta[delayId] * (415.0 / 192.0)));
+		Vec4d b4 = theta[delayId] * theta[delayId] * ((-27.0 / 16.0) + theta[delayId] * ((9.0 / 2.0) - theta[delayId] * (415.0 / 192.0)));
 		Vec4d b5 = theta[delayId] * theta[delayId] * ((-2187.0 / 8480.0) + theta[delayId] * ((2673.0 / 2120.0) - theta[delayId] * (8991.0 / 6784.0)));
 		Vec4d b6 = theta[delayId] * theta[delayId] * ((33.0 / 35.0) + theta[delayId] * ((-319.0 / 105.0) + theta[delayId] * (187.0 / 84.0)));
 		Vec4d tmp = lX[delayId] + lDt[delayId] * (b1 * lk1[delayId] + b2 * lk2[delayId] + b3 * lk3[delayId] + b4 * lk4[delayId] + b5 * lk5[delayId] + b6 * lk6[delayId]);
-		xDelay[delayId] = select(mask,tmp , xDelay[delayId]);
+		xDelay[delayId] = select(mask, tmp, xDelay[delayId]);
 	}
 	void loadDenseOutput(double atT, int delayId, int vecId)
 	{
@@ -839,66 +840,66 @@ public:
 			{
 				Vec4d getT = atT - t0[i];
 				loadDenseOutput(getT[j], i, j);
-				//std::cout << "atT=" << getT[j] << " Theta=" << theta[0][0] << " x=" << lX[0][0] << std::endl;
 				if (getT[j] <= tStart) //initial function
 				{
 					mask.insert(j, false);
-					xDelay[i].insert(j, initialFunction[denseId](getT[j],0));
+					xDelay[i].insert(j, initialFunction[denseId](getT[j], 0));
 				}
 				else //dense output
 				{
 					mask.insert(j, true);
 				}
 			}
-			//std::cout << mask[0] << mask[1] << mask[2] << mask[3] << "\n";
-			denseOutput(mask,i);
-		}
-		//std::cout << "t=" << atT[0] << " xd= "<< xDelay[0][1] <<  std::endl;
-	}
-
-	//save functions
-	void save(std::string filename, unsigned int varId = 0, unsigned int vecId = 0, int precision = 16)
-	{
-		std::ofstream ofs(filename);
-		if (!ofs.is_open())
-		{
-			std::cout << "Cannot open file: " << filename << std::endl;
-			return;
-		}
-		ofs << std::setprecision(precision);
-		for (size_t i = 0; i < memoryId; i++)
-		{
-			ofs << denseT[i][vecId] << "\t";
-			ofs << denseX[i][varId][vecId] << std::endl;
-		}
-		ofs.flush();
-		ofs.close();
-	}
-
-	//debug functions
-	void printMesh(int precision = 6)
-	{
-		std::cout << std::setprecision(precision) << "Mesh Length = " << meshLen << std::endl;
-		for (size_t i = 0; i < meshLen; i++)
-		{
-			std::cout << mesh[i] << "\tType: " << meshType[i] << std::endl;
+			denseOutput(mask, i);
 		}
 	}
-	void printParameters(int precision = 6)
+	void allocateMemory()
 	{
-		std::cout << std::setprecision(precision) << "Number of parameters = " << nrOfParameters << std::endl;
+		//allocate arrays
+		this->denseT = new double* [nrOfSteps];
+		this->denseX = new double** [nrOfSteps];
+		this->denseK1 = new double** [nrOfSteps];
+		this->denseK2 = new double** [nrOfSteps];
+		this->denseK3 = new double** [nrOfSteps];
+		this->denseK4 = new double** [nrOfSteps];
+		this->denseK5 = new double** [nrOfSteps];
+		this->denseK6 = new double** [nrOfSteps];
 
-		for (size_t i = 0; i < nrOfParameters; i++)
+		for (size_t i = 0; i < nrOfSteps; i++)
 		{
-			std::cout << "Parameter 1:" << std::endl;
-			for (size_t j = 0; j < nrOfUnroll; j++)
+			this->denseT[i] = new double[vecSize];
+			for (size_t j = 0; j < vecSize; j++)
 			{
+				this->denseT[i][j] = NAN;
+			}
+			this->denseX[i] = new double* [nrOfDenseVars];
+			this->denseK1[i] = new double* [nrOfDenseVars];
+			this->denseK2[i] = new double* [nrOfDenseVars];
+			this->denseK3[i] = new double* [nrOfDenseVars];
+			this->denseK4[i] = new double* [nrOfDenseVars];
+			this->denseK5[i] = new double* [nrOfDenseVars];
+			this->denseK6[i] = new double* [nrOfDenseVars];
+			for (size_t j = 0; j < nrOfDenseVars; j++)
+			{
+				this->denseX[i][j] = new double[vecSize];
+				this->denseK1[i][j] = new double[vecSize];
+				this->denseK2[i][j] = new double[vecSize];
+				this->denseK3[i][j] = new double[vecSize];
+				this->denseK4[i][j] = new double[vecSize];
+				this->denseK5[i][j] = new double[vecSize];
+				this->denseK6[i][j] = new double[vecSize];
 				for (size_t k = 0; k < vecSize; k++)
 				{
-					std::cout << p[j * nrOfParameters + i][k] << std::endl;
+					this->denseX[i][j][k] = NAN;
+					this->denseK1[i][j][k] = NAN;
+					this->denseK2[i][j][k] = NAN;
+					this->denseK3[i][j][k] = NAN;
+					this->denseK4[i][j][k] = NAN;
+					this->denseK5[i][j][k] = NAN;
+					this->denseK6[i][j][k] = NAN;
 				}
 			}
-			std::cout << std::endl;
+
 		}
 	}
 };
