@@ -5,12 +5,12 @@
 #include <iomanip>
 #include <string>
 #include <fstream>
-#include "C:/Users/nnagy/Documents/Egyetem/HDS/VCL/version2-2.01.02/vectorclass.h"
-#include "ParalellDDE_Common.cpp"
+#include "vectorclass.h"
+#include "ParallelDDE_Common.cpp"
 #define vecSize 4
 
 template<unsigned int nrOfVars, unsigned int nrOfDelays = 0, unsigned int nrOfDenseVars = 0, unsigned int nrOfParameters = 0, unsigned int nrOfEvents = 0, unsigned int nrOfUnroll = 1>
-class ParalellDDE_RK4
+class ParallelDDE_RK4
 {
 private:
 	//sizes
@@ -80,7 +80,7 @@ private:
 
 public:
 	//constructor
-	ParalellDDE_RK4() : nrOfExtraPoints(10), meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), eventFlushLookBack(100)
+	ParallelDDE_RK4() : nrOfExtraPoints(10), meshPrecision(1e-10), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), eventFlushLookBack(100)
 	{
 		for (size_t i = 0; i < nrOfDelays; i++)
 		{
@@ -106,18 +106,13 @@ public:
 	};
 
 	//destruktor
-	~ParalellDDE_RK4()
+	~ParallelDDE_RK4()
 	{
 		delete prevVals, newVals, p, x, x0, kAct, kSum, xTmp, xDelay;
 		delete xb, xn, xdb, xdn, tb, deltat, pdeltat, t0;
-	}; //does nothing
+	}; 
 
 	//set functions
-	void setIntegrationRange(double tStart, double tEnd)
-	{
-		this->tStart = tStart;
-		this->tEnd = tEnd;
-	}
 	void setStepSize(double dt)
 	{
 		this->dtBase = dt;
@@ -233,14 +228,14 @@ public:
 			this->x0[i] = x0;
 		}
 	}
-	void setX0(double* x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
+	void setX0(double* x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * 4
 	{
 		for (size_t i = 0; i < nrOfUnroll; i++)
 		{
-			this->x0[nrOfVars * i + varId].load(x0 + 4 * i);
+			this->x0[nrOfVars * i + varId].load(x0 + vecSize * i);
 		}
 	}
-	void setX0(double x0, unsigned int varId) //size of x0 should be at least nrOfUnroll * nrOfParameter * 4
+	void setX0(double x0, unsigned int varId) 
 	{
 		for (size_t i = 0; i < nrOfUnroll; i++)
 		{
@@ -305,10 +300,6 @@ public:
 			this->p[nrOfParameters * i + parameterId] = p;
 		}
 	}
-	void setT(double t)
-	{
-		this->t = t;
-	}
 	void setEventPrecision(double prec)
 	{
 		this->eventPrecision = prec;
@@ -346,7 +337,7 @@ public:
 		}
 		return meshTmp;
 	}
-	double* getMeshType()
+	int* getMeshType()
 	{
 		int* meshTmp = new double[meshLen];
 		for (size_t i = 0; i < meshLen; i++)
@@ -372,10 +363,6 @@ public:
 			}
 		}
 		return endVals;
-	}
-	double getT()
-	{
-		return t;
 	}
 
 	//calculate functions - alternative to set, it does the job itself
@@ -404,7 +391,7 @@ public:
 	}
 
 	//integration functions
-	void integrate(void f(Vec4d* xd, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
+	void integrate(void f(Vec4d* dx, double t, Vec4d* x, Vec4d* xDelay, Vec4d* p))
 	{
 		//initialize variables
 		t = tStart; //tStart -> t

@@ -7,12 +7,12 @@
 #include <fstream>
 #include "C:/Users/nnagy/Documents/Egyetem/HDS/VCL/version2-2.01.02/vectorclass.h"
 #include "C:/Users/nnagy/Documents/Egyetem/HDS/VCL/version2-2.01.02/vectormath_exp.h"
-#include "ParalellDDE_Common.cpp"
+#include "ParallelDDE_Common.cpp"
 #include "DP5_Constants.h"
 #define vecSize 4
 
 template<unsigned int nrOfVars, unsigned int nrOfDelays = 0, unsigned int nrOfDenseVars = 0, unsigned int nrOfParameters = 0, unsigned int nrOfEvents = 0, unsigned int nrOfUnroll = 1>
-class ParalellDDE_DP5
+class ParallelDDE_DP5
 {
 private:
 	//sizes
@@ -42,7 +42,7 @@ private:
 
 
 	//delays -> synchronized
-	double * t0; 
+	double * t0;
 	unsigned int delayIdToDenseId[nrOfDelays]; //	lookup table:	delay index		-> dense variable index
 	unsigned int varIdToDenseId[nrOfVars]; //		lookup table:	variable index	-> dense variable index
 	unsigned int denseIdToVarId[nrOfDenseVars]; //	lookup table:	dense variable	-> variable index
@@ -95,7 +95,7 @@ private:
 
 public:
 	//constructor
-	ParalellDDE_DP5() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfSteps(100), dtBase(0.2), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), absTol(1e-6), relTol(1e-6), dtMin(1e-10), dtMax(1e6), boundDecrease(0.1), boundIncrease(10.0), safetyFactor(0.8)
+	ParallelDDE_DP5() : meshPrecision(1e-14), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfSteps(100), dtBase(0.2), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), absTol(1e-6), relTol(1e-6), dtMin(1e-10), dtMax(1e6), boundDecrease(0.1), boundIncrease(10.0), safetyFactor(0.8)
 	{
 		//initial function
 		initialFunction = new funcSlot[nrOfDenseVars];
@@ -131,7 +131,7 @@ public:
 		xDelay = new Vec4d[nrOfDelays];
 
 		x = new Vec4d[nrOfVars];
-		
+
 		//dense output
 		lk1 =   new Vec4d[nrOfDelays];
 		lk2 =   new Vec4d[nrOfDelays];
@@ -148,10 +148,12 @@ public:
 	};
 
 	//destruktor
-	~ParalellDDE_DP5()
+	~ParallelDDE_DP5()
 	{
-
-	}; //does nothing
+		delete initialFunction, lastIndex, newLastIndex, meshId, prevVals, prevprevVals, newVals;
+		delete p, endvals, x0, x4, x5, k1, k2, k3, k4, k5, k6, k7, xTmp, xDelay, x;
+		delete lk1, lk2, lk3, lk4, lk5, lk6, lX, lDt, theta, t0;
+	};
 
 	//set functions
 	void setSolverTol(double absTol, double relTol)
@@ -245,7 +247,7 @@ public:
 		this->delayIdToDenseId[delayId] = denseVarId; //delay --> dense var
 		this->delayIdToVarId[delayId] = this->denseIdToVarId[denseVarId]; //delay --> var
 	}
-	void addInitialFunction(int varId, int denseVarId, double f(double, int))
+	void addInitialFunction(double f(double, int), int varId, int denseVarId)
 	{
 		this->initialFunction[denseVarId] = f;
 		this->varIdToDenseId[varId] = denseVarId; //var --> dense
@@ -447,7 +449,7 @@ public:
 		{
 			meshId[i] = 0;
 		}
-		
+
 		//integration
 		//0 normal step
 		//1 simple mesh point
@@ -508,7 +510,7 @@ public:
 			for (size_t i = 0; i < vecSize; i++)
 			{
 				unsigned int id = meshId[i];
-				if (id < meshLen && mesh[id] <= t[i] + dt[i]) 
+				if (id < meshLen && mesh[id] <= t[i] + dt[i])
 				{
 					if (stepType[i] == 5) //forced step
 					{
@@ -598,7 +600,7 @@ public:
 			}
 
 
-			//if step accepted load new 
+			//if step accepted load new
 			for (size_t i = 0; i < nrOfDelays; i++)
 			{
 				for (size_t j = 0; j < vecSize; j++)
@@ -610,7 +612,7 @@ public:
 					}
 				}
 			}
-			
+
 
 			//save dense values
 			t.store(denseT[memoryId]);
@@ -786,7 +788,7 @@ private:
 			x4[i] = x[i] + dt * (b41 * k1[i] + b42 * k2[i] + b43 * k3[i] + b44 * k4[i] + b45 * k5[i] + b46 * k6[i] + b47 * k7[i]);
 		}
 	}
-	void denseOutput(Vec4db mask, int delayId) //from values loaded into memory
+	void denseOutput(Vec4db mask, unsigned int delayId) //from values loaded into memory
 	{
 		Vec4d b1 = theta[delayId] * (1 + theta[delayId] * ((-1337.0 / 480.0) + theta[delayId] * ((1039.0 / 360.0) - theta[delayId] * (1163.0 / 1152.0))));
 		Vec4d b2 = 0;
@@ -797,7 +799,7 @@ private:
 		Vec4d tmp = lX[delayId] + lDt[delayId] * (b1 * lk1[delayId] + b2 * lk2[delayId] + b3 * lk3[delayId] + b4 * lk4[delayId] + b5 * lk5[delayId] + b6 * lk6[delayId]);
 		xDelay[delayId] = select(mask, tmp, xDelay[delayId]);
 	}
-	void loadDenseOutput(double atT, int delayId, int vecId)
+	void loadDenseOutput(double atT, unsigned int delayId, unsigned int vecId)
 	{
 		unsigned int linearIndex = delayId * vecSize + vecId;
 		unsigned int id = lastIndex[linearIndex];
