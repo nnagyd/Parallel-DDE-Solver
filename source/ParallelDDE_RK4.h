@@ -365,6 +365,21 @@ public:
 		return endVals;
 	}
 
+	double* getParameters(int parId = 0)
+	{
+		double* pars = new double[vecSize * nrOfUnroll];
+
+		for (size_t i = 0; i < nrOfUnroll; i++)
+		{
+			for (size_t j = 0; j < vecSize; j++)
+			{
+				int id = i * vecSize + j;
+				pars[id] = p[nrOfParameters * i + parId][j];
+			}
+		}
+		return pars;
+	}
+
 	//calculate functions - alternative to set, it does the job itself
 	void calculateIntegrationMesh()
 	{
@@ -574,6 +589,7 @@ public:
 
 				//save end values
 				memoryId++;
+				if (memoryId >= denseOutputMemoryLength) break;
 				tVals[memoryId] = t;
 				for (size_t i = 0; i < nrOfUnroll; i++)
 				{

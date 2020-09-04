@@ -396,6 +396,16 @@ public:
 		}
 		return stepCount;
 	}
+	double* getParameters(int parId = 0)
+	{
+		double* pars = new double[vecSize];
+		for (size_t i = 0; i < vecSize; i++)
+		{
+			pars[i] = p[parId][i];
+		}
+
+		return pars;
+	}
 
 	//calculate functions - alternative to set, it does the job itself
 	void calculateIntegrationMesh()
