@@ -824,6 +824,12 @@ private:
 			newLastIndex[linearIndex] = id--;
 
 			//load next step from memory
+			//std::cout << denseK1[id][denseVar][vecId] << "\t " << denseK2[id][denseVar][vecId] << "\t";
+			//std::cout << denseK3[id][denseVar][vecId] << "\t " << denseK4[id][denseVar][vecId] << "\t";
+			//std::cout << denseK5[id][denseVar][vecId] << "\t " << denseK6[id][denseVar][vecId] << "\t";
+			//std::cout << denseK5[id][denseVar][vecId] << "\t " << denseK6[id][denseVar][vecId] << "\t";
+			//std::cout << lk2[delayId][0] << "\t " << lk2[delayId][1] << "\t";
+			//std::cout << denseX[id][denseVar][vecId] << "\t " << id << "\t" << "delayId=" << delayId << "\n";
 			lk1[delayId].insert(vecId, denseK1[id][denseVar][vecId]);
 			lk2[delayId].insert(vecId, denseK2[id][denseVar][vecId]);
 			lk3[delayId].insert(vecId, denseK3[id][denseVar][vecId]);

@@ -80,7 +80,7 @@ private:
 
 public:
 	//constructor
-	ParallelDDE_RK4() : nrOfExtraPoints(10), meshPrecision(1e-10), meshLen(0), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), eventFlushLookBack(100)
+	ParallelDDE_RK4() : nrOfExtraPoints(10), meshPrecision(1e-10), meshLen(0), discC0Init(NULL), discC1Init(NULL), nrOfC0(0), nrOfC1(0), nrOfDisc(0), nrOfInitialPoints(50), nrOfSteps(100), dtBase(0.01), tStart(0.0), tEnd(10.0), eventPrecision(1e-10), eventFlushLookBack(100)
 	{
 		for (size_t i = 0; i < nrOfDelays; i++)
 		{
@@ -384,7 +384,7 @@ public:
 	void calculateIntegrationMesh()
 	{
 		double* discC1Full = new double[nrOfC1 + 1];
-		discC1Full[0] = 0.0;
+		discC1Full[0] = tStart;
 		for (size_t i = 1; i < nrOfC1 + 1; i++)
 		{
 			discC1Full[i] = discC1Init[i - 1];

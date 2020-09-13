@@ -11,7 +11,7 @@ Created by: Daniel Nagy, 24/08/2020
 #include <string>
 #include <fstream>
 #include <cmath>
-#include "source/ParalellDDE_RK4.h"
+#include "source/ParallelDDE_RK4.h"
 
 #define PI 3.1415926535897932385
 
@@ -48,7 +48,7 @@ int main()
     const unsigned nrOfParameters = 1;
     const unsigned nrOfSteps = 10000;
     const unsigned unroll = 8;
-    ParalellDDE_RK4<nrOfVars, nrOfDelays, nrOfDenseVars, nrOfParameters, 0, unroll> solver;
+    ParallelDDE_RK4<nrOfVars, nrOfDelays, nrOfDenseVars, nrOfParameters, 0, unroll> solver;
 
     //parameter sweep
     const unsigned parameters = 18144;
@@ -83,7 +83,7 @@ int main()
     solver.setX0(0.5, 0);
 
     //save end values
-    std::ofstream ofs("endvals.txt");
+    std::ofstream ofs("example4_endvals.txt");
     ofs << std::setprecision(16);
 
     //start parameter sweep
