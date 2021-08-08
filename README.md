@@ -1,4 +1,7 @@
-# Parallel DDE Solver - Test version
+# Parallel DDE Solver
  Parallel Delay Differential Equation solver on CPU using AVX Vector instructions, based on [VCL](https://github.com/vectorclass/version2) library.
 
-# Test version
+# Requirements
+- C++14 or C++17 compiler
+- [VCL](https://github.com/vectorclass/version2) library version 2
+
