@@ -11,10 +11,10 @@
 
 - Using AVX instruction set and built-in loop unrolling
 
-- Performance on the delayed logistic equation
+## Performance on the delayed logistic equation
 
 ![alt text](https://github.com/nnagyd/Parallel-DDE-Solver/blob/master/performance/logistic.png)
 
-- Performance on the delayed Lorenz equation
+## Performance on the delayed Lorenz equation
 
 ![alt text](https://github.com/nnagyd/Parallel-DDE-Solver/blob/master/performance/lorenz.png)
